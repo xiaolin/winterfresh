@@ -168,7 +168,13 @@ npm run dev
 # Install PM2 globally
 sudo npm install -g pm2
 
-# Start winterfresh
+# Build TypeScript
+npm run build
+
+# Start winterfresh using ecosystem config
+pm2 start ecosystem.config.cjs
+
+# Or start directly
 pm2 start dist/app.js --name winterfresh
 
 # Save PM2 configuration
@@ -243,25 +249,6 @@ npm install
 
 # Run
 npm run dev
-```
-
-### Project Structure
-
-```
-winterfresh/
-├── src/
-│   ├── app.ts           # Main application loop
-│   └── tones.ts         # Audio chime functions
-├── models/              # Vosk speech recognition model
-│   └── vosk-model-small-en-us-0.15/
-├── sounds/              # Generated audio chimes
-│   ├── wake.wav
-│   └── processing.wav
-├── wake.py              # Python wake word detection script
-├── .venv/               # Python virtual environment
-├── .env                 # Environment variables (gitignored)
-├── package.json
-└── tsconfig.json
 ```
 
 ### Update Script
