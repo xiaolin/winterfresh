@@ -1,3 +1,50 @@
-.env
+# Dependencies
 node_modules/
+.venv/
+
+# Build output
 dist/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Models (large files)
+models/
+
+# Sounds (generated)
+sounds/
+
+# Temp files
+*.wav
+*.mp3
+/tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+pm2-*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Coverage
+coverage/
+.nyc_output/

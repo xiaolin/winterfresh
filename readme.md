@@ -4,47 +4,57 @@ A fast, concise voice assistant for Raspberry Pi with wake word detection, conve
 
 ## Features
 
-- 🎤 Wake word detection ("winterfresh", "winter fresh", "hey winterfresh")
+- 🎤 Local wake word detection ("winterfresh") - no API cost for listening
 - 💬 Conversational memory (5-minute timeout)
 - 🔇 Barge-in support (interrupt while speaking)
-- 🎵 Pleasant audio chimes for feedback
+- 🎵 Audio feedback with elegant chimes
 - 🔄 Auto-restart on inactivity
 - 🎙️ Hardware echo cancellation (with USB speakerphone)
 
 ## Hardware Requirements
 
-- Raspberry Pi 5 8GB
+- Raspberry Pi 5 (8GB recommended) or Raspberry Pi 4 (4GB+)
 - USB Speakerphone with echo cancellation (recommended):
+  - Jabra Speak 510 (~$100) - Best option
+  - Anker PowerConf S3 (~$130)
   - eMeet M2 (~$80) - Budget option
+- Or separate USB microphone + speaker (may have echo issues)
 
 ## Prerequisites
 
 - Node.js v20+
+- Python 3.11+
 - OpenAI API key
 - Sox audio tools
 
 ## Installation
 
-### 1. System Setup
+### 1. System Setup (Raspberry Pi)
 
 ```bash
 # Update system
 sudo apt-get update
 sudo apt-get upgrade -y
 
-# Install Node.js
+# Install Node.js v20
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
-# Install sox for audio
+# Install Python 3.11+ and pip
+sudo apt-get install -y python3 python3-pip python3-venv
+
+# Install sox for audio recording/playback
 sudo apt-get install -y sox libsox-fmt-all
+
+# Install portaudio (required for sounddevice)
+sudo apt-get install -y portaudio19-dev
 
 # Install git
 sudo apt-get install -y git
 
 # Verify versions
-node --version  # Should be v20+
-npm --version
+node --version    # Should be v20+
+python3 --version # Should be 3.11+
 ```
 
 ### 2. Clone & Setup Project
@@ -54,63 +64,133 @@ npm --version
 git clone <your-repo-url> ~/winterfresh
 cd ~/winterfresh
 
-# Install dependencies
+# Install Node.js dependencies
 npm install
 
 # Build TypeScript
 npm run build
+```
 
+### 3. Python Virtual Environment Setup
+
+```bash
+# Create virtual environment
+python3 -m venv .venv
+
+# Activate it
+source .venv/bin/activate
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Verify installation
+python -c "import numpy, sounddevice, vosk; print('✅ All Python packages installed')"
+
+# Deactivate (optional, the app will use .venv/bin/python directly)
+deactivate
+```
+
+### 4. Download Vosk Model (for local wake word detection)
+
+```bash
+# Create models directory
+mkdir -p models
+cd models
+
+# Download small English model (~50MB)
+wget https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+unzip vosk-model-small-en-us-0.15.zip
+rm vosk-model-small-en-us-0.15.zip
+
+cd ..
+```
+
+### 5. Environment Configuration
+
+```bash
 # Create environment file
-cp .env.example .env
 nano .env
 ```
 
-Add your OpenAI API key to `.env`:
+Add your OpenAI API key:
 
 ```bash
-OPENAI_API_KEY=your_key_here
-WINTERFRESH_MAX_TURNS=12
+OPENAI_API_KEY=your_openai_api_key_here
+WINTERFRESH_MAX_TURNS=20
 ```
 
-### 3. Audio Device Setup
+### 6. Generate Audio Chimes
 
 ```bash
-# Plug in your USB speakerphone (Jabra recommended)
+# Create sounds directory
+mkdir -p sounds
+
+# Generate wake chime (rising tone)
+sox -n sounds/wake.wav synth 0.15 sine 880 fade 0.02 0.15 0.05 vol 0.3
+
+# Generate processing chime (gentle pulse)
+sox -n sounds/processing.wav synth 0.25 sine 440 fade 0.05 0.25 0.1 vol 0.2 : \
+    synth 0.25 sine 523 fade 0.05 0.25 0.1 vol 0.2 delay 0.125
+```
+
+### 7. Audio Device Setup (Raspberry Pi)
+
+```bash
+# Plug in your USB speakerphone
 
 # Check if detected
 arecord -l  # List capture devices
 aplay -l    # List playback devices
 
-# Should see your device (e.g., "Jabra SPEAK 510")
-
-# Test recording
-rec -c 1 -r 24000 test.wav trim 0 3
+# Test recording (speak into mic, then Ctrl+C)
+rec -c 1 -r 16000 /tmp/test.wav trim 0 3
 
 # Test playback
-play test.wav
+play /tmp/test.wav
 
-# If device is not default, set it manually
-# Find card number from arecord -l (e.g., card 1)
+# Test Python audio
+source .venv/bin/activate
+python -c "import sounddevice as sd; print(sd.query_devices())"
+deactivate
+```
+
+If your USB device is not the default, configure it:
+
+```bash
+# Find your device card number from arecord -l (e.g., card 1)
 echo "defaults.pcm.card 1" >> ~/.asoundrc
 echo "defaults.ctl.card 1" >> ~/.asoundrc
 ```
 
-### 4. Install PM2 Process Manager
+### 8. Test the Setup
+
+```bash
+# Test wake word detection first
+source .venv/bin/activate
+python wake.py
+# Say "winterfresh" - should print "WAKE" and exit
+deactivate
+
+# Test full app
+npm run dev
+# Or: npx tsx src/app.ts
+```
+
+### 9. Install PM2 for Production
 
 ```bash
 # Install PM2 globally
 sudo npm install -g pm2
 
 # Start winterfresh
-pm2 start dist/loop.js --name winterfresh
+pm2 start dist/app.js --name winterfresh
 
 # Save PM2 configuration
 pm2 save
 
 # Setup auto-start on boot
 pm2 startup
-# Follow the command it outputs (example):
-# sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u pi --hp /home/pi
+# Follow the command it outputs (copy/paste and run it)
 
 # Verify it's running
 pm2 status
@@ -119,14 +199,23 @@ pm2 logs winterfresh --lines 50
 
 ## Usage
 
+### Voice Commands
+
+1. **Wake the assistant**: Say "winterfresh", "winter fresh", or "hey winterfresh"
+2. **Speak your request**: After hearing the wake chime
+3. **Interrupt anytime**: Start speaking to interrupt long responses
+4. **Wait for timeout**: 7 seconds of inactivity returns to wake word mode
+
+### Audio Feedback
+
+- 🎵 **Wake chime** - Wake word detected, ready to listen
+- 🎵 **Processing chime** - Processing your request, stops when assistant speaks
+
 ### PM2 Commands
 
 ```bash
 # View live logs
 pm2 logs winterfresh
-
-# View logs with filter
-pm2 logs winterfresh --lines 100
 
 # Monitor resource usage
 pm2 monit
@@ -139,38 +228,54 @@ pm2 stop winterfresh
 
 # Start the assistant
 pm2 start winterfresh
-
-# Remove from PM2
-pm2 delete winterfresh
 ```
-
-### Voice Commands
-
-1. **Wake the assistant**: Say "winterfresh", "winter fresh", or "hey winterfresh"
-2. **Speak your request**: After hearing the chime
-3. **Interrupt anytime**: Start speaking to interrupt long responses
-4. **Wait for timeout**: 7 seconds of inactivity returns to wake word mode
-
-### Audio Feedback
-
-- 🎵 **Rising chime** - Wake word detected
-- 🎵 **Single tone** - Ready to listen (during conversation)
-- 🎵 **Looping chime** - Processing your request
-- 🎵 **Falling chime** - Going to sleep
 
 ## Development
 
-### Local Testing (Mac/Linux)
+### Local Testing (Mac)
+
+**Note:** For Mac testing, use headphones to avoid echo (built-in speakers will be heard by built-in mic).
 
 ```bash
-# Install dependencies
+# Install system dependencies (Mac)
+brew install sox portaudio
+
+# Setup Python venv
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+deactivate
+
+# Download Vosk model
+mkdir -p models && cd models
+curl -LO https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+unzip vosk-model-small-en-us-0.15.zip
+cd ..
+
+# Install Node dependencies
 npm install
 
-# Build
-npm run build
+# Run
+npm run dev
+```
 
-# Run locally
-node dist/loop.js
+### Project Structure
+
+```
+winterfresh/
+├── src/
+│   ├── app.ts           # Main application loop
+│   └── tones.ts         # Audio chime functions
+├── models/              # Vosk speech recognition model
+│   └── vosk-model-small-en-us-0.15/
+├── sounds/              # Generated audio chimes
+│   ├── wake.wav
+│   └── processing.wav
+├── wake.py              # Python wake word detection script
+├── .venv/               # Python virtual environment
+├── .env                 # Environment variables (gitignored)
+├── package.json
+└── tsconfig.json
 ```
 
 ### Update Script
@@ -183,6 +288,9 @@ cd ~/winterfresh
 git pull
 npm install
 npm run build
+source .venv/bin/activate
+pip install -r requirements.txt 2>/dev/null || pip install numpy sounddevice vosk
+deactivate
 pm2 restart winterfresh
 echo "✅ Winterfresh updated!"
 ```
@@ -193,179 +301,108 @@ Make it executable:
 chmod +x update.sh
 ```
 
-Run updates:
-
-```bash
-./update.sh
-```
-
 ## Troubleshooting
 
-### Audio Device Not Found
+### Wake word not detecting
+
+```bash
+# Test Python script directly
+source .venv/bin/activate
+python wake.py
+# Speak and watch the audio level bar - it should move
+# Say "winterfresh" clearly
+deactivate
+
+# If no audio level, check your mic:
+python -c "import sounddevice as sd; print(sd.query_devices())"
+```
+
+### "No module named numpy" error
+
+```bash
+# Make sure packages are in the venv, not global Python
+.venv/bin/pip install numpy sounddevice vosk
+
+# Verify
+.venv/bin/python -c "import numpy, sounddevice, vosk; print('OK')"
+```
+
+### Audio device not found
 
 ```bash
 # List available devices
 arecord -l
 aplay -l
 
-# Test recording manually
-rec -c 1 -r 24000 /tmp/test.wav silence 1 0.10 2% 1 1.0 2%
-
-# Test playback
-play sounds/wake.wav
+# Check Python sees the device
+source .venv/bin/activate
+python -c "import sounddevice as sd; print(sd.query_devices())"
 ```
 
-### Permission Issues
+### Permission issues (Raspberry Pi)
 
 ```bash
 # Add user to audio group
-sudo usermod -a -G audio pi
+sudo usermod -a -G audio $USER
 
-# Logout and login again for changes to take effect
+# Logout and login again
 ```
 
-### Check Logs
+### Mac microphone permission
 
-```bash
-# PM2 logs
-pm2 logs winterfresh --lines 100
+Go to **System Settings → Privacy & Security → Microphone** and enable for:
 
-# Check for errors
-pm2 logs winterfresh --err
+- Terminal (or iTerm)
+- Visual Studio Code (if running from VS Code)
 
-# System logs (if using systemd)
-sudo journalctl -u winterfresh -f
-```
-
-### API Key Issues
-
-```bash
-# Verify API key is set
-cat .env | grep OPENAI_API_KEY
-
-# Test API connection
-curl https://api.openai.com/v1/models \
-  -H "Authorization: Bearer $OPENAI_API_KEY"
-```
-
-### Clean Temp Files
-
-```bash
-# Remove old recordings
-rm /tmp/winterfresh-*.wav
-
-# Check disk space
-df -h
-```
+Quit and reopen the app after enabling.
 
 ## Configuration
 
 Environment variables in `.env`:
 
-```bash
-# Required
-OPENAI_API_KEY=sk-...
-
-# Optional
-WINTERFRESH_MAX_TURNS=20          # Max conversation turns (default: 20, ~5-6 min conversations)
-```
-
-**Conversation length guide:**
-
-- `MAX_TURNS=12` → ~3 minutes
-- `MAX_TURNS=20` → ~5-6 minutes (recommended)
-- `MAX_TURNS=30` → ~7-8 minutes
-- `MAX_TURNS=50` → ~12+ minutes
-
-## System Service (Alternative to PM2)
-
-If you prefer systemd over PM2:
-
-Create `/etc/systemd/system/winterfresh.service`:
-
-```ini
-[Unit]
-Description=Winterfresh Voice Assistant
-After=network.target sound.target
-
-[Service]
-Type=simple
-User=pi
-WorkingDirectory=/home/pi/winterfresh
-Environment="NODE_ENV=production"
-EnvironmentFile=/home/pi/winterfresh/.env
-ExecStart=/usr/bin/node /home/pi/winterfresh/dist/loop.js
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
-
-```bash
-sudo systemctl enable winterfresh
-sudo systemctl start winterfresh
-sudo systemctl status winterfresh
-
-# View logs
-sudo journalctl -u winterfresh -f
-```
-
-## Maintenance
-
-### Daily Restart (Optional)
-
-Add to crontab:
-
-```bash
-crontab -e
-```
-
-Add line:
-
-```
-0 4 * * * pm2 restart winterfresh
-```
-
-### Weekly System Updates
-
-```bash
-sudo apt-get update && sudo apt-get upgrade -y
-```
-
-## Architecture
-
-```
-winterfresh/
-├── src/
-│   ├── loop.ts          # Main application loop
-│   └── tones.ts         # Audio chime functions
-├── sounds/              # Generated audio files
-│   ├── wake.wav
-│   ├── listen.wav
-│   ├── processing.wav
-│   └── sleep.wav
-├── dist/                # Compiled JavaScript
-└── .env                 # Environment variables
-```
+| Variable                | Default    | Description                            |
+| ----------------------- | ---------- | -------------------------------------- |
+| `OPENAI_API_KEY`        | (required) | Your OpenAI API key                    |
+| `WINTERFRESH_MAX_TURNS` | `20`       | Max conversation turns before trimming |
+| `SAMPLE_RATE`           | `24000`    | Audio sample rate for recording        |
 
 ## Performance
 
-- Wake word detection: ~1.5-2 seconds
-- Response latency: ~1-3 seconds (depends on OpenAI API)
-- Memory usage: ~50-100MB
-- CPU usage: ~5-15% on Raspberry Pi 4
+- Wake word detection: Local (Vosk) - no API cost
+- Speech-to-text: OpenAI Whisper API
+- Chat: OpenAI GPT-4o-mini
+- Text-to-speech: OpenAI TTS
+
+**Raspberry Pi 5 (8GB):**
+
+- Memory usage: ~150-200MB
+- CPU usage: ~5-10% during wake word listening
+- Wake word latency: ~0.3-0.5 second
+- Response latency: ~1-2 seconds (API dependent)
+
+**Raspberry Pi 4 (4GB):**
+
+- Memory usage: ~150-200MB
+- CPU usage: ~10-20% during wake word listening
+- Wake word latency: ~0.5-1 second
+- Response latency: ~1-3 seconds (API dependent)
+
+### Estimated Monthly Cost by Usage
+
+| Usage Level | Exchanges/month | GPT-5      | GPT-4o-mini |
+| ----------- | --------------- | ---------- | ----------- |
+| Light       | ~50             | $0.03-0.05 | $0.01-0.02  |
+| Moderate    | ~200            | $0.10-0.20 | $0.03-0.05  |
+| Heavy       | ~500            | $0.25-0.50 | $0.08-0.15  |
+
+**Additional costs per exchange:**
+
+- Transcription (gpt-4o-transcribe): ~$0.003-0.006 (5-10 sec audio)
+- TTS (gpt-4o-mini-tts): ~$0.001-0.003 (50-200 chars response)
+
+**Total realistic cost:** Light usage with GPT-5 = **~$0.05-0.10/month** 🎉
 
 ## License
 
 MIT
-
-## Credits
-
-Built with:
-
-- OpenAI API (GPT-4o-mini, Whisper)
-- Sox (audio processing)
-- PM2 (process management)

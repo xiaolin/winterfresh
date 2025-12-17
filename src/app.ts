@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import OpenAI, { toFile } from 'openai';
 
 import {
@@ -12,8 +13,15 @@ import {
   chimeProcessingStop,
 } from './tones.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '24000';
+const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-4o-mini';
+const TRANSCRIBE_MODEL =
+  process.env.TRANSCRIBE_MODEL ?? 'gpt-4o-mini-transcribe';
+const TTS_MODEL = process.env.TTS_MODEL ?? 'gpt-4o-mini-tts';
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
 
@@ -114,6 +122,12 @@ async function recordUntilSilence(
   const recordProcess = spawn('rec', args, { stdio: 'inherit' });
   currentRecProcess = recordProcess;
 
+  // Detect spawn errors (mic disconnected, permission issues, etc.)
+  recordProcess.on('error', (err) => {
+    console.error('❌ Recording process error:', err);
+    console.error('Mic may be disconnected or permission denied');
+  });
+
   // Monitor file size to detect active recording
   const monitorVoiceIn = setInterval(async () => {
     try {
@@ -169,7 +183,7 @@ async function recordUntilSilence(
 async function transcribe(path: string): Promise<string> {
   const bytes = await fs.readFile(path);
   const resp = await client.audio.transcriptions.create({
-    model: 'gpt-4o-mini-transcribe',
+    model: TRANSCRIBE_MODEL,
     file: await toFile(bytes, 'winterfresh-in.wav'),
   });
   return (resp.text ?? '').trim();
@@ -177,7 +191,7 @@ async function transcribe(path: string): Promise<string> {
 
 async function chat(messages: Msg[]): Promise<string> {
   const resp = await client.chat.completions.create({
-    model: 'gpt-4o-mini',
+    model: CHAT_MODEL,
     messages,
   });
   return resp.choices[0]?.message?.content?.trim() ?? '';
@@ -203,7 +217,7 @@ async function speakTTS(text: string) {
 
   currentOperations.add('TTSSpeaking');
   const audio = await client.audio.speech.create({
-    model: 'gpt-4o-mini-tts',
+    model: TTS_MODEL,
     voice: 'alloy',
     input: text,
     response_format: 'mp3',
@@ -250,90 +264,110 @@ async function speakTTS(text: string) {
 }
 
 async function waitForWakeWord(): Promise<void> {
-  console.log('\n🎤 Listening for wake word ("winterfresh")...');
+  console.log('\n🎤 Listening for wake word (local Vosk)...');
 
-  while (isAppRunning) {
-    try {
-      const wavPath = '/tmp/winterfresh-wake.wav';
-      // Use shorter silence duration (0.5s) for wake word detection - faster response
-      await recordUntilSilence(wavPath, undefined, '1.0');
-      const text = await transcribe(wavPath);
-      if (!text) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        continue;
+  const pythonPath = path.join(process.cwd(), '.venv', 'bin', 'python');
+  const wakePath = path.join(process.cwd(), 'wake.py');
+
+  // Use -u flag for unbuffered Python output
+  const wakeProcess = spawn(pythonPath, ['-u', wakePath], {
+    stdio: ['inherit', 'pipe', 'pipe'],
+  });
+
+  return new Promise((resolve, reject) => {
+    wakeProcess.stdout?.on('data', (data: Buffer) => {
+      const text = data.toString();
+      process.stdout.write(text);
+
+      if (text.includes('WAKE')) {
+        wakeProcess.kill('SIGTERM');
+        resolve();
       }
+    });
 
-      console.log('Heard:', text);
+    wakeProcess.stderr?.on('data', (data: Buffer) => {
+      process.stderr.write(data);
+    });
 
-      const lower = text.toLowerCase();
-      const hasWakeWord = WAKE_WORDS.some((word) => lower.includes(word));
-
-      if (hasWakeWord) {
-        console.log('✅ Wake word detected!');
-        return; // this will end the waitForWakeWord function and start active session
+    wakeProcess.on('error', reject);
+    wakeProcess.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+      } else if (code !== null && isAppRunning) {
+        reject(new Error(`Wake process exited with code ${code}`));
       }
-
-      console.log('(Not wake word, still listening...)');
-      // Add a small delay before next recording to ensure cleanup
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    } catch (err) {
-      console.error('Wake word error:', err);
-      restart();
-    }
-  }
+    });
+  });
 }
 
 async function activeSession() {
-  // Use persistent history instead of creating new array
   const messages = conversationHistory;
 
-  // Check if continuing an existing conversation
   const historyAge =
     lastInteractionTime > 0 ? Date.now() - lastInteractionTime : 0;
   const isReturning = messages.length > 1 && historyAge < HISTORY_TIMEOUT_MS;
 
-  await chimeWakeDetected(); // indicate wake word detected
+  await chimeWakeDetected();
 
   if (isReturning) {
-    // don't await, start listening right away
     speakTTS('Welcome back! How can I assist you further?');
   } else {
     speakTTS('Whats up?');
   }
 
+  // Track pending work so we don't pile up requests
+  let abortPending = false;
+
   while (true) {
     console.log('\n--- Speak now (auto-stops on silence) ---');
-    const wavPath = '/tmp/winterfresh-in.wav';
+    const wavPath = `/tmp/winterfresh-in-${Date.now()}.wav`;
 
-    // Start recording with timeout, don't wait for sound forever
     await recordUntilSilence(wavPath, IDLE_TIMEOUT_MS, '1.0');
 
-    // Check if app was stopped during recording
     if (!isAppRunning) return;
 
-    // Start elegant loading chime
-    chimeProcessingStart();
+    // Signal any previous pending work to abort
+    abortPending = true;
 
-    const text = await transcribe(wavPath);
-    if (!isAppRunning) return;
+    // Start processing transcribe and chat in background, don't await
+    (async () => {
+      // This task is now the "current" one, reset flag
+      abortPending = false;
 
-    console.log('You:', text);
+      chimeProcessingStart();
 
-    messages.push({ role: 'user', content: text });
-    trimHistory(messages);
+      try {
+        const text = await transcribe(wavPath);
+        if (!isAppRunning || abortPending) return; // Check if newer task started
 
-    const reply = await chat(messages);
-    if (!isAppRunning) return;
-    console.log('Winterfresh:', reply);
+        if (!text) {
+          chimeProcessingStop();
+          return;
+        }
 
-    messages.push({ role: 'assistant', content: reply });
-    trimHistory(messages);
+        console.log('You:', text);
 
-    // Reset timeout on each interaction
-    restartHistoryTimeout();
+        messages.push({ role: 'user', content: text });
+        trimHistory(messages);
 
-    // Don't await - let it speak while we start listening again for barge-in
-    speakTTS(reply);
+        const reply = await chat(messages);
+        if (!isAppRunning || abortPending) return; // Check if newer task started
+
+        console.log('Winterfresh:', reply);
+
+        messages.push({ role: 'assistant', content: reply });
+        trimHistory(messages);
+
+        restartHistoryTimeout();
+
+        speakTTS(reply);
+      } catch (err) {
+        console.error('Processing error:', err);
+        chimeProcessingStop();
+      } finally {
+        fs.unlink(wavPath).catch(() => {});
+      }
+    })();
   }
 }
 
