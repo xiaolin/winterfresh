@@ -102,48 +102,47 @@ function restartHistoryTimeout() {
 async function recordUntilSilence(
   outPath: string,
   timeoutMs?: number,
-  silenceDuration: string = '1.0', // Make this configurable
-) {
+  silenceDuration: string = '1.0',
+): Promise<boolean> {
+  // Return whether recording completed normally
   const args = [
     '-c',
-    '1', // Number of channels (1 = mono, 2 = stereo)
+    '1',
     '-r',
-    SAMPLE_RATE, // Sample rate in Hz (e.g., 48000 = 48kHz)
+    SAMPLE_RATE,
     '-b',
-    '16', // Bit depth (16-bit audio quality)
-    outPath, // Output file path where recording will be saved
-    'silence', // Enable silence detection to auto-stop recording
-    '1', // Stop recording after detecting 1 period of silence
-    '0.10', // Minimum duration of sound before silence (0.10 = 100ms)
-    '2%', // Threshold for sound detection (2% of max volume)
-    '1', // Number of consecutive silence periods to detect before stopping
-    silenceDuration, // Duration of silence required to stop (e.g., '1.0' = 1 second)
-    '2%', // Threshold for silence detection (2% of max volume)
+    '16',
+    outPath,
+    'silence',
+    '1',
+    '0.10',
+    '2%',
+    '1',
+    silenceDuration,
+    '2%',
   ];
 
   const recordProcess = spawn('rec', args, { stdio: 'inherit' });
   currentRecProcess = recordProcess;
+  let killedByTimeout = false;
 
   // Detect spawn errors (mic disconnected, permission issues, etc.)
   recordProcess.on('error', (err) => {
     console.error('❌ Recording process error:', err);
-    console.error('Mic may be disconnected or permission denied');
   });
 
   // Monitor file size to detect active recording
   const monitorVoiceIn = setInterval(async () => {
     try {
       const stats = await fs.stat(outPath).catch(() => null);
-      // If file exists and has content (> 1KB WAV header), we're actively recording
       if (stats && stats.size > 1000) {
         currentOperations.add('activeAsking');
-        killCurrentTTS(); // we started interupting, kill TTS if any
+        killCurrentTTS();
       }
 
       if (getRunningOperations().length > 0 && restartTimeout) {
         clearTimeout(restartTimeout);
         restartTimeout = null;
-        // clear history timeout as well
         clearHistoryTimeout();
       }
 
@@ -151,6 +150,8 @@ async function recordUntilSilence(
       if (timeoutMs && getRunningOperations().length === 0 && !restartTimeout) {
         restartTimeout = setTimeout(async () => {
           restartTimeout = null;
+          killedByTimeout = true;
+          killCurrentRecProcess();
           await speakTTS('Alright, going back to sleep.');
           restart();
         }, timeoutMs);
@@ -158,14 +159,13 @@ async function recordUntilSilence(
     } catch (err) {
       // Ignore
     }
-  }, 200); // Check every 200ms
+  }, 200);
 
   try {
-    const promises = [
+    await Promise.race([
       once(recordProcess, 'exit'),
       once(recordProcess, 'close'),
-    ];
-    await Promise.race(promises);
+    ]);
   } catch (err) {
     console.error('Recording error:', err);
     throw err;
@@ -180,6 +180,8 @@ async function recordUntilSilence(
       currentRecProcess = null;
     }
   }
+
+  return !killedByTimeout;
 }
 
 async function transcribe(path: string): Promise<string> {
@@ -317,30 +319,41 @@ async function activeSession() {
     speakTTS('Whats up?');
   }
 
-  // Track pending work so we don't pile up requests
   let abortPending = false;
 
   while (true) {
     console.log('\n--- Speak now (auto-stops on silence) ---');
     const wavPath = `/tmp/winterfresh-in-${Date.now()}.wav`;
 
-    await recordUntilSilence(wavPath, IDLE_TIMEOUT_MS, '1.0');
+    const voiceRecCompletedNormally = await recordUntilSilence(
+      wavPath,
+      IDLE_TIMEOUT_MS,
+      '1.0',
+    );
+
+    // If killed by timeout, exit - restart() was already called
+    if (!voiceRecCompletedNormally) {
+      fs.unlink(wavPath).catch(() => {});
+      return;
+    }
 
     if (!isAppRunning) return;
 
-    // Signal any previous pending work to abort
+    const stats = await fs.stat(wavPath).catch(() => null);
+    if (!stats || stats.size < 1000) {
+      fs.unlink(wavPath).catch(() => {});
+      continue;
+    }
+
     abortPending = true;
 
-    // Start processing transcribe and chat in background, don't await
     (async () => {
-      // This task is now the "current" one, reset flag
       abortPending = false;
-
       chimeProcessingStart();
 
       try {
         const text = await transcribe(wavPath);
-        if (!isAppRunning || abortPending) return; // Check if newer task started
+        if (!isAppRunning || abortPending) return;
 
         if (!text) {
           chimeProcessingStop();
@@ -353,7 +366,7 @@ async function activeSession() {
         trimHistory(messages);
 
         const reply = await chat(messages);
-        if (!isAppRunning || abortPending) return; // Check if newer task started
+        if (!isAppRunning || abortPending) return;
 
         console.log('Winterfresh:', reply);
 
@@ -380,6 +393,13 @@ async function restart() {
   await start();
 }
 
+function killCurrentRecProcess() {
+  if (currentRecProcess) {
+    currentRecProcess.kill('SIGKILL');
+    currentRecProcess = null;
+  }
+}
+
 async function stop() {
   console.log('\n🛑 Stopping Winterfresh...');
   isAppRunning = false;
@@ -391,10 +411,7 @@ async function stop() {
   }
 
   // Kill recording process if running
-  if (currentRecProcess) {
-    currentRecProcess.kill('SIGKILL');
-    currentRecProcess = null;
-  }
+  killCurrentRecProcess();
 
   // clear chimeProcessingStop incase its running for whatever reason
   chimeProcessingStop();
