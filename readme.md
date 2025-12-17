@@ -61,7 +61,7 @@ python3 --version # Should be 3.11+
 
 ```bash
 # Clone repository
-git clone <your-repo-url> ~/winterfresh
+git clone https://github.com/xiaolin/winterfresh.git ~/winterfresh
 cd ~/winterfresh
 
 # Install Node.js dependencies
