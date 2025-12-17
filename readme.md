@@ -14,11 +14,10 @@ A fast, concise voice assistant for Raspberry Pi with wake word detection, conve
 ## Hardware Requirements
 
 - Raspberry Pi 5 (8GB recommended) or Raspberry Pi 4 (4GB+)
+- Raspberry Pi 5 27W USB-C Power Supply (recommended for Pi 5 with USB peripherals)
+- SanDisk 64GB Extreme microSDXC UHS-I Memory Card (fast boot and read/write)
 - USB Speakerphone with echo cancellation (recommended):
-  - Jabra Speak 510 (~$100) - Best option
-  - Anker PowerConf S3 (~$130)
-  - eMeet M2 (~$80) - Budget option
-- Or separate USB microphone + speaker (may have echo issues)
+  - EMEET Conference Speakerphone M0 Plus
 
 ## Prerequisites
 
