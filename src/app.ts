@@ -2,9 +2,7 @@ import 'dotenv/config';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import OpenAI, { toFile } from 'openai';
 
 import {
@@ -13,8 +11,13 @@ import {
   chimeProcessingStop,
 } from './tones.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import {
+  runPreflightChecks,
+  cleanupZombieProcesses,
+  recordSuccess,
+  recordError,
+  resetErrorCounter,
+} from './cleanup.js';
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '24000';
@@ -45,7 +48,6 @@ const system: Msg = {
 };
 
 const MAX_TURNS = Number(process.env.WINTERFRESH_MAX_TURNS ?? 20);
-const WAKE_WORDS = ['winterfresh', 'winter fresh', 'hey winterfresh'];
 const IDLE_TIMEOUT_MS = 7000; // 7 seconds
 const HISTORY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -397,33 +399,35 @@ async function stop() {
   // clear chimeProcessingStop incase its running for whatever reason
   chimeProcessingStop();
 
-  // Clean up temp files
-  try {
-    await fs.unlink('/tmp/winterfresh-in.wav').catch(() => {});
-    await fs.unlink('/tmp/winterfresh-wake.wav').catch(() => {});
-    await fs
-      .unlink(path.join(os.tmpdir(), 'winterfresh-tts.wav'))
-      .catch(() => {});
-  } catch (err) {
-    // Ignore cleanup errors
-  }
+  // Clean up temp files and zombie processes
+  cleanupZombieProcesses();
 
   console.log('✅ Cleanup complete');
 }
 
 async function start() {
   isAppRunning = true;
+  resetErrorCounter();
 
   while (isAppRunning) {
     try {
       await waitForWakeWord();
       if (!isAppRunning) break;
 
+      recordSuccess(); // Wake word detection succeeded
+
       await activeSession();
       if (!isAppRunning) break;
+
+      recordSuccess(); // Session completed successfully
     } catch (err) {
       if (isAppRunning) {
-        console.error('Error in main loop:', err);
+        const shouldRestart = recordError(err);
+        if (shouldRestart) {
+          console.log('🔄 Attempting recovery restart...');
+          await restart();
+          return; // Exit this start() call, restart() will call start() again
+        }
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
     }
@@ -432,6 +436,13 @@ async function start() {
 
 async function main() {
   console.log('🌨️  Winterfresh starting...');
+
+  // Run pre-flight checks (not async, remove await)
+  const checksPass = runPreflightChecks();
+  if (!checksPass) {
+    console.error('❌ Pre-flight checks failed. Exiting.');
+    process.exit(1);
+  }
 
   // Handle graceful shutdown
   process.on('SIGINT', async () => {

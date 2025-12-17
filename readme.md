@@ -119,20 +119,6 @@ OPENAI_API_KEY=your_openai_api_key_here
 WINTERFRESH_MAX_TURNS=20
 ```
 
-### 6. Generate Audio Chimes
-
-```bash
-# Create sounds directory
-mkdir -p sounds
-
-# Generate wake chime (rising tone)
-sox -n sounds/wake.wav synth 0.15 sine 880 fade 0.02 0.15 0.05 vol 0.3
-
-# Generate processing chime (gentle pulse)
-sox -n sounds/processing.wav synth 0.25 sine 440 fade 0.05 0.25 0.1 vol 0.2 : \
-    synth 0.25 sine 523 fade 0.05 0.25 0.1 vol 0.2 delay 0.125
-```
-
 ### 7. Audio Device Setup (Raspberry Pi)
 
 ```bash
