@@ -112,6 +112,27 @@ cd ..
 nano .env
 ```
 
+Environment variables in `.env`:
+
+| Variable                | Default                  | Description                            |
+| ----------------------- | ------------------------ | -------------------------------------- |
+| `OPENAI_API_KEY`        | (required)               | Your OpenAI API key                    |
+| `CHAT_MODEL`            | `gpt-4o-mini`            | OpenAI chat model                      |
+| `TRANSCRIBE_MODEL`      | `gpt-4o-mini-transcribe` | OpenAI transcription model             |
+| `TTS_MODEL`             | `gpt-4o-mini-tts`        | OpenAI text-to-speech model            |
+| `WINTERFRESH_MAX_TURNS` | `20`                     | Max conversation turns before trimming |
+| `SAMPLE_RATE`           | `24000`                  | Audio sample rate for recording        |
+
+Example `.env` file:
+
+```bash
+OPENAI_API_KEY=your_openai_api_key_here
+CHAT_MODEL=gpt-4o-mini
+TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
+TTS_MODEL=gpt-4o-mini-tts
+WINTERFRESH_MAX_TURNS=20
+```
+
 Add your OpenAI API key:
 
 ```bash
@@ -329,16 +350,6 @@ Go to **System Settings → Privacy & Security → Microphone** and enable for:
 - Visual Studio Code (if running from VS Code)
 
 Quit and reopen the app after enabling.
-
-## Configuration
-
-Environment variables in `.env`:
-
-| Variable                | Default    | Description                            |
-| ----------------------- | ---------- | -------------------------------------- |
-| `OPENAI_API_KEY`        | (required) | Your OpenAI API key                    |
-| `WINTERFRESH_MAX_TURNS` | `20`       | Max conversation turns before trimming |
-| `SAMPLE_RATE`           | `24000`    | Audio sample rate for recording        |
 
 ## Performance
 
