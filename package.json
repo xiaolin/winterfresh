@@ -1,0 +1,22 @@
+{
+  "name": "winterfresh",
+  "version": "1.0.0",
+  "description": "winterfresh - your AI-powered personal assistant",
+  "scripts": {
+    "dev": "tsx src/app.ts",
+    "start": "NODE_ENV=production npx tsx src/app.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "openai": "^6.13.0"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^25.0.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
