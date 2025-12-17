@@ -3,12 +3,12 @@
   "version": "1.0.0",
   "description": "winterfresh - your AI-powered personal assistant",
   "scripts": {
-    "dev": "tsx src/app.ts",
-    "start": "NODE_ENV=production npx tsx src/app.ts"
+    "start": "tsx src/app.ts",
+    "build": "tsc"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "dotenv": "^17.2.3",
     "openai": "^6.13.0"
