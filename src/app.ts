@@ -5,6 +5,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import OpenAI, { toFile } from 'openai';
 
+import { waitForStableFileSize, isLikelyValidWav } from './audio-utils.js';
+
 import {
   chimeWakeDetected,
   chimeProcessingStart,
@@ -52,7 +54,7 @@ const system: Msg = {
 };
 
 const MAX_TURNS = Number(process.env.WINTERFRESH_MAX_TURNS ?? 20);
-const IDLE_TIMEOUT_MS = 7000; // 7 seconds
+const IDLE_TIMEOUT_MS = 10000; // 10 seconds
 const HISTORY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 let currentTtsProcess: ReturnType<typeof spawn> | null = null;
@@ -66,8 +68,14 @@ let conversationHistory: Msg[] = [system];
 let lastInteractionTime = 0;
 
 // Track current operations
-type Operation = 'TTSSpeaking' | 'activeAsking';
+type Operation = 'TTSSpeaking' | 'ActiveAsking';
 const currentOperations = new Set<Operation>();
+
+// Goal: make quiet speech reliably transcribable and avoid early cutoff.
+const SILENCE_THRESHOLD = '0.5%'; // was 2% (too aggressive for quiet speech)
+const SILENCE_DURATION_SEC = '1.5'; // was 1.0 (cuts off mid-sentence pauses)
+const INPUT_VOLUME = 2; // Linux only (linear factor)
+const MAC_GAIN_DB = 6; // ~20*log10(3) = +9.54 dB
 
 function getRunningOperations(): string[] {
   return Array.from(currentOperations);
@@ -106,7 +114,7 @@ function restartHistoryTimeout() {
 async function recordUntilSilence(
   outPath: string,
   timeoutMs?: number,
-  silenceDuration: string = '1.0',
+  silenceDuration: string = SILENCE_DURATION_SEC,
 ): Promise<boolean> {
   // Return whether recording completed normally
   const recordProcess = IS_LINUX
@@ -117,18 +125,17 @@ async function recordUntilSilence(
           [
             `set -o pipefail;`,
             `arecord -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
-            `| sox -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 "${outPath}"`,
-            `silence 1 0.05 2% 1 ${silenceDuration} 2%`,
+            `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 "${outPath}"`,
+            `silence 1 0.05 ${SILENCE_THRESHOLD} 1 ${silenceDuration} ${SILENCE_THRESHOLD}`,
           ].join(' '),
         ],
-        {
-          stdio: 'inherit',
-          detached: true, // IMPORTANT: spawn in new process group
-        },
+        { stdio: 'inherit', detached: true },
       )
     : spawn(
         'rec',
         [
+          '-G', // guard against clipping
+          '-D', // disable dithering (avoids "dither clipped" warnings)
           '-c',
           '1',
           '-r',
@@ -136,13 +143,15 @@ async function recordUntilSilence(
           '-b',
           '16',
           outPath,
+          'gain',
+          String(MAC_GAIN_DB),
           'silence',
           '1',
           '0.05',
-          '2%',
+          SILENCE_THRESHOLD,
           '1',
           silenceDuration,
-          '2%',
+          SILENCE_THRESHOLD,
         ],
         { stdio: 'inherit' },
       );
@@ -160,7 +169,7 @@ async function recordUntilSilence(
     try {
       const stats = await fs.stat(outPath).catch(() => null);
       if (stats && stats.size > 1000) {
-        currentOperations.add('activeAsking');
+        currentOperations.add('ActiveAsking');
         killCurrentTTS();
       }
 
@@ -199,7 +208,7 @@ async function recordUntilSilence(
       clearTimeout(restartTimeout);
       restartTimeout = null;
     }
-    currentOperations.delete('activeAsking');
+    currentOperations.delete('ActiveAsking');
     if (currentRecProcess === recordProcess) {
       currentRecProcess = null;
     }
@@ -208,8 +217,8 @@ async function recordUntilSilence(
   return !killedByTimeout;
 }
 
-async function transcribe(path: string): Promise<string> {
-  const bytes = await fs.readFile(path);
+async function transcribe(wavPath: string): Promise<string> {
+  const bytes = await fs.readFile(wavPath);
   const resp = await client.audio.transcriptions.create({
     model: TRANSCRIBE_MODEL,
     file: await toFile(bytes, 'winterfresh-in.wav'),
@@ -352,7 +361,7 @@ async function activeSession() {
     const voiceRecCompletedNormally = await recordUntilSilence(
       wavPath,
       IDLE_TIMEOUT_MS,
-      '1.0',
+      SILENCE_DURATION_SEC,
     );
 
     // If killed by timeout, exit - restart() was already called
@@ -363,9 +372,13 @@ async function activeSession() {
 
     if (!isAppRunning) return;
 
-    const stats = await fs.stat(wavPath).catch(() => null);
-    if (!stats || stats.size < 1000) {
-      fs.unlink(wavPath).catch(() => {});
+    // Ensure the file is fully flushed + looks like a real WAV before transcribing
+    await waitForStableFileSize(wavPath);
+
+    const bytes = await fs.readFile(wavPath).catch(() => null);
+    if (!bytes || bytes.length < 1000 || !isLikelyValidWav(bytes)) {
+      await fs.unlink(wavPath).catch(() => {});
+      console.error('⚠️  Skipping invalid WAV');
       continue;
     }
 
@@ -377,6 +390,7 @@ async function activeSession() {
 
       try {
         const text = await transcribe(wavPath);
+
         if (!isAppRunning || abortPending) return;
 
         if (!text) {
