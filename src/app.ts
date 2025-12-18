@@ -115,15 +115,16 @@ async function recordUntilSilence(
         [
           '-lc',
           [
-            // Capture with arecord in the device's supported format (EMEET: 2ch @ 16k),
-            // then downmix to mono WAV for the rest of the pipeline.
             `set -o pipefail;`,
             `arecord -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
             `| sox -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 "${outPath}"`,
             `silence 1 0.05 2% 1 ${silenceDuration} 2%`,
           ].join(' '),
         ],
-        { stdio: 'inherit' },
+        {
+          stdio: 'inherit',
+          detached: true, // IMPORTANT: spawn in new process group
+        },
       )
     : spawn(
         'rec',
@@ -146,7 +147,6 @@ async function recordUntilSilence(
         { stdio: 'inherit' },
       );
 
-  currentRecProcess = recordProcess;
   currentRecProcess = recordProcess;
   let killedByTimeout = false;
 
@@ -418,10 +418,33 @@ async function restart() {
 }
 
 function killCurrentRecProcess() {
-  if (currentRecProcess) {
-    currentRecProcess.kill('SIGKILL');
-    currentRecProcess = null;
+  if (!currentRecProcess) return;
+
+  const proc = currentRecProcess;
+  currentRecProcess = null;
+
+  if (IS_LINUX && proc.pid !== undefined) {
+    // Check pid exists before using it
+    // Kill entire process group (bash + arecord + sox)
+    try {
+      process.kill(-proc.pid, 'SIGTERM');
+    } catch (err) {
+      console.error('SIGTERM process group failed:', err);
+    }
+    setTimeout(() => {
+      try {
+        if (proc.pid !== undefined) {
+          process.kill(-proc.pid, 'SIGKILL');
+        }
+      } catch {}
+    }, 500);
+    return;
   }
+
+  // macOS/fallback
+  try {
+    proc.kill('SIGKILL');
+  } catch {}
 }
 
 async function stop() {
