@@ -19,6 +19,7 @@ import {
   resetErrorCounter,
 } from './cleanup.js';
 
+const IS_LINUX = process.platform === 'linux';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '24000';
 const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-4o-mini';
@@ -105,24 +106,42 @@ async function recordUntilSilence(
   silenceDuration: string = '1.0',
 ): Promise<boolean> {
   // Return whether recording completed normally
-  const args = [
-    '-c',
-    '1',
-    '-r',
-    SAMPLE_RATE,
-    '-b',
-    '16',
-    outPath,
-    'silence',
-    '1',
-    '0.05',
-    '2%',
-    '1',
-    silenceDuration,
-    '2%',
-  ];
+  const recordProcess = IS_LINUX
+    ? spawn(
+        'bash',
+        [
+          '-lc',
+          [
+            // Capture raw PCM quickly with arecord, let sox do silence-stop + WAV writing
+            `arecord -f S16_LE -c 1 -r ${SAMPLE_RATE} -t raw`,
+            `| sox -t raw -r ${SAMPLE_RATE} -e signed-integer -b 16 -c 1 - -t wav ${outPath}`,
+            `silence 1 0.05 2% 1 ${silenceDuration} 2%`,
+          ].join(' '),
+        ],
+        { stdio: 'inherit' },
+      )
+    : spawn(
+        'rec',
+        [
+          '-c',
+          '1',
+          '-r',
+          SAMPLE_RATE,
+          '-b',
+          '16',
+          outPath,
+          'silence',
+          '1',
+          '0.05',
+          '2%',
+          '1',
+          silenceDuration,
+          '2%',
+        ],
+        { stdio: 'inherit' },
+      );
 
-  const recordProcess = spawn('rec', args, { stdio: 'inherit' });
+  currentRecProcess = recordProcess;
   currentRecProcess = recordProcess;
   let killedByTimeout = false;
 
