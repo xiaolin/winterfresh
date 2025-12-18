@@ -13,9 +13,6 @@ dist/
 # Models (large files)
 models/
 
-# Sounds (generated)
-sounds/
-
 # Temp files
 *.wav
 *.mp3
