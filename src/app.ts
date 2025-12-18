@@ -101,6 +101,18 @@ function clearHistoryTimeout() {
   }
 }
 
+function clearRestartTimeout() {
+  if (restartTimeout) {
+    clearTimeout(restartTimeout);
+    restartTimeout = null;
+  }
+}
+
+function handleTTSSpeaking() {
+  currentOperations.add('TTSSpeaking');
+  clearRestartTimeout();
+}
+
 function restartHistoryTimeout() {
   lastInteractionTime = Date.now();
 
@@ -185,8 +197,7 @@ async function recordUntilSilence(
       }
 
       if (getRunningOperations().length > 0 && restartTimeout) {
-        clearTimeout(restartTimeout);
-        restartTimeout = null;
+        clearRestartTimeout();
         clearHistoryTimeout();
       }
 
@@ -214,10 +225,7 @@ async function recordUntilSilence(
     throw err;
   } finally {
     clearInterval(monitorVoiceIn);
-    if (restartTimeout) {
-      clearTimeout(restartTimeout);
-      restartTimeout = null;
-    }
+    clearRestartTimeout();
     currentOperations.delete('ActiveAsking');
     if (currentRecProcess === recordProcess) {
       currentRecProcess = null;
@@ -262,7 +270,7 @@ async function speakTTS(text: string) {
   // Kill any previous playback (safety)
   killCurrentTTS();
 
-  currentOperations.add('TTSSpeaking');
+  handleTTSSpeaking();
   const audio = await client.audio.speech.create({
     model: TTS_MODEL,
     voice: 'alloy',
@@ -283,7 +291,7 @@ async function speakTTS(text: string) {
   if (reader && speakProcess.stdin) {
     try {
       while (true) {
-        currentOperations.add('TTSSpeaking');
+        handleTTSSpeaking();
         const { done, value } = await reader.read();
         if (done) break;
         if (!speakProcess.stdin.destroyed) {
@@ -396,6 +404,7 @@ async function activeSession() {
         const cmd = normalizeSpokenCommand(text);
         if (cmd === 'winter fresh stop' || cmd === 'winterfresh stop') {
           console.log('🛑 Voice command: stop');
+          await speakTTS('Stop command detected');
           await backToSleep();
           return;
         }
