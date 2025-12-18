@@ -5,61 +5,68 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Use aplay on Linux/Raspberry Pi for even faster playback
 const isLinux = process.platform === 'linux';
 
 let processingChimeProcess: ReturnType<typeof spawn> | null = null;
-let processingLoopInterval: NodeJS.Timeout | null = null;
+let processingLoopTimer: NodeJS.Timeout | null = null;
+let processingLoopRunning = false;
 
-async function playSound(filename: string) {
-  return new Promise<void>((resolve) => {
-    const soundPath = path.join(__dirname, '../sounds', filename);
-    const player = isLinux
-      ? spawn('aplay', ['-q', soundPath])
-      : spawn('play', ['-q', soundPath]);
+function spawnPlayer(soundPath: string) {
+  return isLinux
+    ? spawn('aplay', ['-q', soundPath])
+    : spawn('play', ['-q', soundPath]);
+}
 
-    player.on('close', () => resolve());
-    player.on('error', () => resolve());
+export async function chimeWakeDetected() {
+  const soundPath = path.join(__dirname, '../sounds', 'wake.wav');
+  await new Promise<void>((resolve) => {
+    const p = spawnPlayer(soundPath);
+    p.on('close', () => resolve());
+    p.on('error', () => resolve());
   });
 }
 
-// Pleasant chime patterns
-export async function chimeWakeDetected() {
-  await playSound('wake.wav');
-}
-
-// Start looping processing chime
 export function chimeProcessingStart() {
   chimeProcessingStop();
 
   const soundPath = path.join(__dirname, '../sounds', 'processing.wav');
+  processingLoopRunning = true;
 
-  function playOnce() {
-    if (processingLoopInterval === null) return;
+  const playNext = () => {
+    if (!processingLoopRunning) return;
 
-    const player = isLinux
-      ? spawn('aplay', ['-q', soundPath])
-      : spawn('play', ['-q', soundPath]);
+    const p = spawnPlayer(soundPath);
+    processingChimeProcess = p;
 
-    processingChimeProcess = player;
-    player.on('close', () => {
+    p.on('close', () => {
       processingChimeProcess = null;
-    });
-  }
+      if (!processingLoopRunning) return;
 
-  playOnce();
-  processingLoopInterval = setInterval(playOnce, 1500);
+      // small gap; tune if you want
+      processingLoopTimer = setTimeout(playNext, 150);
+    });
+
+    p.on('error', () => {
+      processingChimeProcess = null;
+      if (!processingLoopRunning) return;
+      processingLoopTimer = setTimeout(playNext, 500);
+    });
+  };
+
+  playNext();
 }
 
-// Stop looping processing chime
 export function chimeProcessingStop() {
-  if (processingLoopInterval) {
-    clearInterval(processingLoopInterval);
-    processingLoopInterval = null;
+  processingLoopRunning = false;
+
+  if (processingLoopTimer) {
+    clearTimeout(processingLoopTimer);
+    processingLoopTimer = null;
   }
 
   if (processingChimeProcess) {
-    processingChimeProcess.kill('SIGKILL');
+    // SIGTERM is usually enough; SIGKILL can cut off ALSA weirdly
+    processingChimeProcess.kill('SIGTERM');
     processingChimeProcess = null;
   }
 }
