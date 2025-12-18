@@ -391,11 +391,6 @@ async function activeSession() {
       try {
         const text = await transcribe(wavPath);
 
-        console.log(`🎧 Playing back recording: ${wavPath}`);
-        const playProcess = spawn('afplay', [wavPath]);
-        once(playProcess, 'close');
-        console.log('✅ Playback complete, now transcribing...');
-
         if (!isAppRunning || abortPending) return;
 
         const cmd = normalizeSpokenCommand(text);
