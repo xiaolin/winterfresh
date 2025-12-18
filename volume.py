@@ -19,6 +19,16 @@ VOLUME_WORDS = [
   'winter fresh volume eight',
   'winter fresh volume nine',
   'winter fresh volume ten',
+  'hey winter fresh volume one',
+  'hey winter fresh volume two',
+  'hey winter fresh volume three',
+  'hey winter fresh volume four',
+  'hey winter fresh volume five',
+  'hey winter fresh volume six',
+  'hey winter fresh volume seven',
+  'hey winter fresh volume eight',
+  'hey winter fresh volume nine',
+  'hey winter fresh volume ten',
 ]
 
 def play_chime(volume_level: int):
