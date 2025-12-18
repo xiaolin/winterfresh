@@ -76,16 +76,6 @@ def handle_result(result: dict) -> bool:
   text = (result.get("text", "") or "").lower().strip()
   if not text:
     return False
-  
-  # If there's any sign this utterance is about volume, never treat it as a wake.
-  # Vosk can sometimes return combined strings like: "hey when the fresh volume five".
-  if "volume" in text:
-    level = volume.parse_volume_level(text)
-    if level is not None:
-      print(f"\r🔊 Volume command: {text}                    ", flush=True)
-      volume.set_volume(level)
-    # Even if parsing failed, don't fall through to wake (prevents false wakes).
-    return False
 
   # Volume command: EXACT match only
   if text in volume.VOLUME_WORDS:
