@@ -3,6 +3,9 @@ import numpy as np
 import sounddevice as sd
 from vosk import Model, KaldiRecognizer
 
+# Import volume control
+import volume
+
 WAKE_WORDS = [
   'hey winter fresh',
   'hey when to fresh',
@@ -12,10 +15,7 @@ WAKE_WORDS = [
   'hey winter fest',
 ]
 
-# Max words allowed in final result to trigger wake (prevents long sentences from waking)
 MAX_WAKE_WORDS = int(os.getenv("MAX_WAKE_WORDS", "4"))
-
-# Min confidence (0.0-1.0) for wake word detection
 MIN_CONFIDENCE = float(os.getenv("MIN_WAKE_CONFIDENCE", "0.5"))
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,11 +32,13 @@ IS_LINUX = sys.platform.startswith("linux")
 print("Loading Vosk model...", flush=True)
 model = Model(MODEL_PATH)
 
-# Don't use grammar - we want open-vocabulary so we can filter by length/confidence
-rec = KaldiRecognizer(model, SR)
-rec.SetWords(True)  # Enable word-level confidence
+# Combined grammar: wake words + volume commands
+ALL_PHRASES = WAKE_WORDS + volume.VOLUME_WORDS
+COMBINED_GRAMMAR = json.dumps(ALL_PHRASES)
 
-print(f"✅ Model loaded (max_words={MAX_WAKE_WORDS}, min_conf={MIN_CONFIDENCE})", flush=True)
+rec = KaldiRecognizer(model, SR, COMBINED_GRAMMAR)
+
+print(f"✅ Model loaded (wake+volume grammar, {len(ALL_PHRASES)} phrases)", flush=True)
 
 def audio_level_bar(data, width=30):
   audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
@@ -52,37 +54,33 @@ def downmix_to_mono(raw_bytes: bytes, channels: int) -> bytes:
     pcm = pcm.reshape(-1, channels).mean(axis=1).astype(np.int16)
   return pcm.tobytes()
 
-def should_wake(result: dict) -> bool:
-  """Check if result is a valid wake phrase (not a long sentence or low confidence)."""
+def handle_result(result: dict) -> bool:
+  """Handle recognition result. Returns True if should exit (wake detected)."""
   text = (result.get("text", "") or "").lower().strip()
   if not text:
     return False
 
-  # Check if any wake word is in the text
-  wake_found = any(w in text for w in WAKE_WORDS)
-  if not wake_found:
-    return False
+  # Check for volume command first (exact match, higher priority)
+  for volume_phrase in volume.VOLUME_WORDS:
+    if volume_phrase in text:
+      level = volume.parse_volume_level(text)
+      if level is not None:
+        print(f"\r🔊 Volume command: {text}                    ", flush=True)
+        volume.set_volume(level)
+        return False
 
-  # Reject if sentence is too long (likely part of a conversation)
-  word_count = len(text.split())
-  if word_count > MAX_WAKE_WORDS:
-    print(f"\r⚠️  Rejected (too long: {word_count} words): {text[:50]}", flush=True)
-    return False
+  # Check for wake word (exact match from constrained grammar)
+  for wake_phrase in WAKE_WORDS:
+    if wake_phrase in text:
+      print(f"\r✅ WAKE: {text}                    ", flush=True)
+      print("WAKE", flush=True)
+      return True
 
-  # Check word-level confidence if available
-  word_results = result.get("result", [])
-  if word_results:
-    confidences = [w.get("conf", 1.0) for w in word_results]
-    avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
-    
-    if avg_conf < MIN_CONFIDENCE:
-      print(f"\r⚠️  Rejected (low confidence {avg_conf:.2f}): {text[:50]}", flush=True)
-      return False
-
-  return True
+  # If we get here, it's not in our grammar (shouldn't happen with grammar constraint)
+  return False
 
 def run_linux_arecord():
-  print(f"🎤 Listening for wake word (device={LINUX_DEVICE}, ch={LINUX_CHANNELS}, sr={SR})", flush=True)
+  print(f"🎤 Listening for wake word + volume (device={LINUX_DEVICE}, ch={LINUX_CHANNELS}, sr={SR})", flush=True)
   print("-" * 50, flush=True)
 
   cmd = [
@@ -120,20 +118,13 @@ def run_linux_arecord():
 
     if rec.AcceptWaveform(mono):
       result = json.loads(rec.Result())
-      text = (result.get("text", "") or "").lower()
       
-      if text:
-        if should_wake(result):
-          print(f"\r{bar} | ✅ WAKE: {text}                    ", flush=True)
-          print("WAKE", flush=True)
-          try:
-            proc.terminate()
-          except Exception:
-            pass
-          sys.exit(0)
-        else:
-          # Show rejected phrases briefly
-          print(f"\r{bar} | Heard: {text[:40]:40s}", flush=True)
+      if handle_result(result):
+        try:
+          proc.terminate()
+        except Exception:
+          pass
+        sys.exit(0)
     else:
       partial = json.loads(rec.PartialResult())
       partial_text = partial.get("partial", "") or ""
@@ -148,7 +139,7 @@ def run_non_linux_sounddevice():
     q.put(bytes(indata))
 
   with sd.RawInputStream(channels=1, samplerate=SR, blocksize=BLOCK, dtype="int16", callback=cb):
-    print("🎤 Listening for wake word (sounddevice)...", flush=True)
+    print("🎤 Listening for wake word + volume (sounddevice)...", flush=True)
     print("-" * 50, flush=True)
 
     while True:
@@ -157,15 +148,9 @@ def run_non_linux_sounddevice():
 
       if rec.AcceptWaveform(data):
         result = json.loads(rec.Result())
-        text = (result.get("text", "") or "").lower()
         
-        if text:
-          if should_wake(result):
-            print(f"\r{bar} | ✅ WAKE: {text}                    ", flush=True)
-            print("WAKE", flush=True)
-            sys.exit(0)
-          else:
-            print(f"\r{bar} | Heard: {text[:40]:40s}", flush=True)
+        if handle_result(result):
+          sys.exit(0)
       else:
         partial = json.loads(rec.PartialResult())
         partial_text = partial.get("partial", "") or ""

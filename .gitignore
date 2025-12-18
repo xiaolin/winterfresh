@@ -43,3 +43,5 @@ __pycache__/
 # Coverage
 coverage/
 .nyc_output/
+
+debug.txt
