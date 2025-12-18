@@ -7,6 +7,7 @@ from vosk import Model, KaldiRecognizer
 import volume
 
 WAKE_WORDS = [
+  'winter fresh',
   'hey winter fresh',
   'hey when to fresh',
   'hey when a fresh',
