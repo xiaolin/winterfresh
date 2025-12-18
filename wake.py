@@ -11,7 +11,7 @@ WAKE_WORDS = [
   'when a fresh',
   'when the fresh',
   'winner fresh',
-  'winter fest'
+  'winter fest',
 ]
 
 # Get the directory where this script lives
@@ -20,16 +20,21 @@ MODEL_PATH = os.path.join(SCRIPT_DIR, "models/vosk-model-small-en-us-0.15")
 
 print("Loading Vosk model...", flush=True)
 model = Model(MODEL_PATH)
-rec = KaldiRecognizer(model, 16000)
-print("✅ Model loaded", flush=True)
 
-q = queue.Queue()
 SR = 16000
 BLOCK = 4000
 
+# Constrain decoding to wake phrases (big accuracy boost for wake-word use cases)
+WAKE_GRAMMAR = json.dumps(WAKE_WORDS)
+rec = KaldiRecognizer(model, SR, WAKE_GRAMMAR)
+
+print("✅ Model loaded", flush=True)
+
+q = queue.Queue()
+
 def cb(indata, frames, time, status):
   if status:
-    print(f"⚠️  {status}", file=sys.stderr)
+    print(f"⚠️  {status}", file=sys.stderr, flush=True)
   q.put(bytes(indata))
 
 def audio_level_bar(data, width=30):
@@ -43,11 +48,11 @@ def audio_level_bar(data, width=30):
 with sd.RawInputStream(channels=1, samplerate=SR, blocksize=BLOCK, dtype="int16", callback=cb):
   print("🎤 Listening for 'winterfresh'...", flush=True)
   print("-" * 50, flush=True)
-  
+
   while True:
     data = q.get()
     bar = audio_level_bar(data)
-    
+
     if rec.AcceptWaveform(data):
       result = json.loads(rec.Result())
       text = result.get("text", "").lower()
