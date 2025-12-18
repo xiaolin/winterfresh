@@ -7,7 +7,6 @@ WAKE_WORDS = [
   'winterfresh',
   'winter fresh',
   'when to fresh',
-  'whent to fresh',
   'when a fresh',
   'when the fresh',
   'winner fresh',
