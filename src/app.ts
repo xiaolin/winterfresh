@@ -115,7 +115,7 @@ async function recordUntilSilence(
     outPath,
     'silence',
     '1',
-    '0.10',
+    '0.05',
     '2%',
     '1',
     silenceDuration,
