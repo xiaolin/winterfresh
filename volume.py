@@ -40,6 +40,8 @@ def play_chime(volume_level: int):
     return
   
   amplitude = volume_level / 10.0
+  if (volume_level == 0):
+    amplitude = 0.1  # minimal audible for volume 0
   
   try:
     if IS_LINUX:

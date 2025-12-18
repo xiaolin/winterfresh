@@ -5,8 +5,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import OpenAI, { toFile } from 'openai';
 
-import { waitForStableFileSize, isLikelyValidWav } from './audio-utils.js';
-
 import {
   chimeWakeDetected,
   chimeProcessingStart,
@@ -74,8 +72,8 @@ const currentOperations = new Set<Operation>();
 // Goal: make quiet speech reliably transcribable and avoid early cutoff.
 const SILENCE_THRESHOLD = '0.5%'; // was 2% (too aggressive for quiet speech)
 const SILENCE_DURATION_SEC = '1.5'; // was 1.0 (cuts off mid-sentence pauses)
-const INPUT_VOLUME = 2; // Linux only (linear factor)
-const MAC_GAIN_DB = 6; // ~20*log10(3) = +9.54 dB
+const INPUT_VOLUME = 3; // Linux only (linear factor)
+const MAC_GAIN_DB = 9; // ~20*log10(3) = +9.54 dB
 
 function normalizeSpokenCommand(text: string): string {
   return (text ?? '')
@@ -384,16 +382,6 @@ async function activeSession() {
 
     if (!isAppRunning) return;
 
-    // Ensure the file is fully flushed + looks like a real WAV before transcribing
-    await waitForStableFileSize(wavPath);
-
-    const bytes = await fs.readFile(wavPath).catch(() => null);
-    if (!bytes || bytes.length < 1000 || !isLikelyValidWav(bytes)) {
-      await fs.unlink(wavPath).catch(() => {});
-      console.error('⚠️  Skipping invalid WAV');
-      continue;
-    }
-
     abortPending = true;
 
     (async () => {
@@ -402,6 +390,11 @@ async function activeSession() {
 
       try {
         const text = await transcribe(wavPath);
+
+        console.log(`🎧 Playing back recording: ${wavPath}`);
+        const playProcess = spawn('afplay', [wavPath]);
+        once(playProcess, 'close');
+        console.log('✅ Playback complete, now transcribing...');
 
         if (!isAppRunning || abortPending) return;
 
