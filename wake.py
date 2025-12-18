@@ -11,7 +11,7 @@ WAKE_WORDS = [
   'when a fresh',
   'when the fresh',
   'winner fresh',
-  'winterfest',
+  'winter fest'
 ]
 
 # Get the directory where this script lives
