@@ -3,7 +3,16 @@ import numpy as np
 import sounddevice as sd
 from vosk import Model, KaldiRecognizer
 
-WAKE_WORDS = ['winterfresh', 'winter fresh', 'when to fresh', 'whent to fresh', 'when a fresh']
+WAKE_WORDS = [
+  'winterfresh',
+  'winter fresh',
+  'when to fresh',
+  'whent to fresh',
+  'when a fresh',
+  'when the fresh',
+  'winner fresh',
+  'winterfest',
+]
 
 # Get the directory where this script lives
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
