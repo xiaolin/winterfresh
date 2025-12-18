@@ -22,6 +22,9 @@ import {
 const IS_LINUX = process.platform === 'linux';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '24000';
+const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'plughw:2,0';
+const LINUX_ARECORD_RATE = process.env.ARECORD_RATE ?? '16000';
+const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '2';
 const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-4o-mini';
 const TRANSCRIBE_MODEL =
   process.env.TRANSCRIBE_MODEL ?? 'gpt-4o-mini-transcribe';
@@ -112,9 +115,11 @@ async function recordUntilSilence(
         [
           '-lc',
           [
-            // Capture raw PCM quickly with arecord, let sox do silence-stop + WAV writing
-            `arecord -f S16_LE -c 1 -r ${SAMPLE_RATE} -t raw`,
-            `| sox -t raw -r ${SAMPLE_RATE} -e signed-integer -b 16 -c 1 - -t wav ${outPath}`,
+            // Capture with arecord in the device's supported format (EMEET: 2ch @ 16k),
+            // then downmix to mono WAV for the rest of the pipeline.
+            `set -o pipefail;`,
+            `arecord -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
+            `| sox -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 "${outPath}"`,
             `silence 1 0.05 2% 1 ${silenceDuration} 2%`,
           ].join(' '),
         ],
