@@ -74,7 +74,7 @@ npm run build
 
 ```bash
 # Create virtual environment
-python3 -m venv .venv
+python -m venv .venv
 
 # Activate it
 source .venv/bin/activate
@@ -108,7 +108,7 @@ cd ..
 
 ```bash
 # Create environment file
-nano .env
+vi .env
 ```
 
 Environment variables in `.env`:
@@ -132,14 +132,7 @@ TTS_MODEL=gpt-4o-mini-tts
 WINTERFRESH_MAX_TURNS=20
 ```
 
-Add your OpenAI API key:
-
-```bash
-OPENAI_API_KEY=your_openai_api_key_here
-WINTERFRESH_MAX_TURNS=20
-```
-
-### 7. Audio Device Setup (Raspberry Pi)
+### 6. Audio Device Setup (Raspberry Pi)
 
 ```bash
 # Plug in your USB speakerphone
@@ -160,15 +153,7 @@ python -c "import sounddevice as sd; print(sd.query_devices())"
 deactivate
 ```
 
-If your USB device is not the default, configure it:
-
-```bash
-# Find your device card number from arecord -l (e.g., card 1)
-echo "defaults.pcm.card 1" >> ~/.asoundrc
-echo "defaults.ctl.card 1" >> ~/.asoundrc
-```
-
-### 8. Test the Setup
+### 7. Test the Setup
 
 ```bash
 # Test wake word detection first
@@ -182,7 +167,7 @@ npm run dev
 # Or: npx tsx src/app.ts
 ```
 
-### 9. Install PM2 for Production
+### 8. Install PM2 for Production
 
 ```bash
 # Install PM2 globally

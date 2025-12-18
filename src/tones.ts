@@ -9,6 +9,7 @@ const __dirname = path.dirname(__filename);
 const isLinux = process.platform === 'linux';
 
 let processingChimeProcess: ReturnType<typeof spawn> | null = null;
+let processingLoopInterval: NodeJS.Timeout | null = null;
 
 async function playSound(filename: string) {
   return new Promise<void>((resolve) => {
@@ -28,29 +29,35 @@ export async function chimeWakeDetected() {
 }
 
 // Start looping processing chime
-export async function chimeProcessingStart() {
-  // Kill any existing processing chime
-  if (processingChimeProcess) {
-    processingChimeProcess.kill('SIGKILL');
-    processingChimeProcess = null;
-  }
+export function chimeProcessingStart() {
+  chimeProcessingStop();
 
   const soundPath = path.join(__dirname, '../sounds', 'processing.wav');
 
-  // Play processing chime in a loop
-  const player = isLinux
-    ? spawn('aplay', ['-q', soundPath, '--loop', '999'])
-    : spawn('play', ['-q', soundPath, 'repeat', '999']);
+  function playOnce() {
+    if (processingLoopInterval === null) return;
 
-  processingChimeProcess = player;
+    const player = isLinux
+      ? spawn('aplay', ['-q', soundPath])
+      : spawn('play', ['-q', soundPath]);
 
-  player.on('error', () => {
-    processingChimeProcess = null;
-  });
+    processingChimeProcess = player;
+    player.on('close', () => {
+      processingChimeProcess = null;
+    });
+  }
+
+  playOnce();
+  processingLoopInterval = setInterval(playOnce, 1500);
 }
 
 // Stop looping processing chime
-export async function chimeProcessingStop() {
+export function chimeProcessingStop() {
+  if (processingLoopInterval) {
+    clearInterval(processingLoopInterval);
+    processingLoopInterval = null;
+  }
+
   if (processingChimeProcess) {
     processingChimeProcess.kill('SIGKILL');
     processingChimeProcess = null;
