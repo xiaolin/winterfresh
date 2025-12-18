@@ -177,7 +177,7 @@ sudo npm install -g pm2
 npm run build
 
 # Start winterfresh using ecosystem config
-pm2 start pm2.cjs
+pm2 start pm2.config.js
 
 # Or start directly
 pm2 start dist/app.js --name winterfresh
