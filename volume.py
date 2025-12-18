@@ -9,6 +9,7 @@ ALSA_PLAY_DEVICE = os.getenv("ALSA_PLAY_DEVICE", "plughw:2,0")
 IS_LINUX = os.sys.platform.startswith("linux")
 
 VOLUME_WORDS = [
+  'winter fresh volume zero',
   'winter fresh volume one',
   'winter fresh volume two',
   'winter fresh volume three',
@@ -19,6 +20,7 @@ VOLUME_WORDS = [
   'winter fresh volume eight',
   'winter fresh volume nine',
   'winter fresh volume ten',
+  'hey winter fresh volume zero',
   'hey winter fresh volume one',
   'hey winter fresh volume two',
   'hey winter fresh volume three',
@@ -80,16 +82,22 @@ def set_volume(level: int):
     print(f"❌ Failed to set volume: {e.stderr.decode()}", file=os.sys.stderr, flush=True)
 
 def parse_volume_level(text: str) -> int | None:
-  """Extract volume level (1-10) from recognized text."""
-  text = text.lower()
-  
+  """Extract volume level (0-10) from recognized text."""
+  text = (text or "").lower()
+
   number_map = {
+    'zero': 0,
     'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
     'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
   }
-  
+
+  # Handle digit forms too ("volume 0", "volume 10")
+  for n in range(0, 11):
+    if f" {n}" in f" {text}":
+      return n
+
   for word, num in number_map.items():
     if word in text:
       return num
-  
+
   return None

@@ -77,6 +77,14 @@ const SILENCE_DURATION_SEC = '1.5'; // was 1.0 (cuts off mid-sentence pauses)
 const INPUT_VOLUME = 2; // Linux only (linear factor)
 const MAC_GAIN_DB = 6; // ~20*log10(3) = +9.54 dB
 
+function normalizeSpokenCommand(text: string): string {
+  return (text ?? '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ') // drop punctuation
+    .replace(/\s+/g, ' ') // collapse whitespace
+    .trim();
+}
+
 function getRunningOperations(): string[] {
   return Array.from(currentOperations);
 }
@@ -109,6 +117,11 @@ function restartHistoryTimeout() {
     conversationHistory = [system];
     historyTimeout = null;
   }, HISTORY_TIMEOUT_MS);
+}
+
+async function backToSleep() {
+  await speakTTS('Alright, going back to sleep.');
+  restart();
 }
 
 async function recordUntilSilence(
@@ -185,8 +198,7 @@ async function recordUntilSilence(
           restartTimeout = null;
           killedByTimeout = true;
           killCurrentRecProcess();
-          await speakTTS('Alright, going back to sleep.');
-          restart();
+          await backToSleep();
         }, timeoutMs);
       }
     } catch (err) {
@@ -392,6 +404,13 @@ async function activeSession() {
         const text = await transcribe(wavPath);
 
         if (!isAppRunning || abortPending) return;
+
+        const cmd = normalizeSpokenCommand(text);
+        if (cmd === 'winter fresh stop' || cmd === 'winterfresh stop') {
+          console.log('🛑 Voice command: stop');
+          await backToSleep();
+          return;
+        }
 
         if (!text) {
           chimeProcessingStop();
