@@ -14,8 +14,6 @@ dist/
 models/
 
 # Temp files
-*.wav
-*.mp3
 /tmp/
 
 # OS files
