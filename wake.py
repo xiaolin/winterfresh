@@ -4,7 +4,6 @@ import sounddevice as sd
 from vosk import Model, KaldiRecognizer
 
 WAKE_WORDS = [
-  'winterfresh',
   'winter fresh',
   'when to fresh',
   'when a fresh',
