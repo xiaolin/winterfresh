@@ -19,6 +19,9 @@ VOLUME_WORDS = [
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(SCRIPT_DIR, "models/vosk-model-small-en-us-0.15")
 
+# Path to confirmation chime
+CHIME_PATH = os.path.join(SCRIPT_DIR, "sounds", "volume-confirm.wav")
+
 SR = int(os.getenv("WAKE_SR", "16000"))
 BLOCK = int(os.getenv("WAKE_BLOCK", "4000"))
 
@@ -27,6 +30,7 @@ LINUX_DEVICE = os.getenv("WAKE_ARECORD_DEVICE", "plughw:2,0")
 
 # ALSA card for volume control (usually card 2 for EMEET)
 ALSA_CARD = os.getenv("ALSA_CARD", "2")
+ALSA_PLAY_DEVICE = os.getenv("ALSA_PLAY_DEVICE", "plughw:2,0")
 
 IS_LINUX = sys.platform.startswith("linux")
 
@@ -38,10 +42,42 @@ rec = KaldiRecognizer(model, SR, VOLUME_GRAMMAR)
 
 print("✅ Volume control ready", flush=True)
 
+def play_chime(volume_level: int):
+  """Play confirmation chime at a volume proportional to the level (1-10)."""
+  if not os.path.exists(CHIME_PATH):
+    print(f"⚠️  Chime not found: {CHIME_PATH}", flush=True)
+    return
+  
+  # Scale volume: level 1 = 10% amplitude, level 10 = 100% amplitude
+  amplitude = volume_level / 10.0
+  
+  try:
+    if IS_LINUX:
+      # Use sox to scale amplitude, then pipe to aplay
+      subprocess.run(
+        f"sox {CHIME_PATH} -t wav - vol {amplitude} | aplay -q -D {ALSA_PLAY_DEVICE}",
+        shell=True,
+        check=True,
+        timeout=2,
+      )
+    else:
+      # macOS: use sox to scale and play
+      subprocess.run(
+        f"sox {CHIME_PATH} -t wav - vol {amplitude} | play -q -",
+        shell=True,
+        check=True,
+        timeout=2,
+      )
+  except subprocess.TimeoutExpired:
+    print("⚠️  Chime playback timed out", flush=True)
+  except subprocess.CalledProcessError as e:
+    print(f"⚠️  Chime playback failed: {e}", flush=True)
+
 def set_volume(level: int):
   """Set system volume (0-10 scale -> 0-100% in ALSA)."""
   if not IS_LINUX:
     print(f"Volume control not implemented for {sys.platform}", flush=True)
+    play_chime(level)
     return
   
   percent = level * 10  # 1->10%, 2->20%, ..., 10->100%
@@ -54,6 +90,10 @@ def set_volume(level: int):
       capture_output=True,
     )
     print(f"🔊 Volume set to {level}/10 ({percent}%)", flush=True)
+    
+    # Play confirmation chime scaled to the level
+    play_chime(level)
+    
   except subprocess.CalledProcessError as e:
     print(f"❌ Failed to set volume: {e.stderr.decode()}", file=sys.stderr, flush=True)
 
