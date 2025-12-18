@@ -34,13 +34,13 @@ VOLUME_WORDS = [
 ]
 
 def play_chime(volume_level: int):
-  """Play confirmation chime at a volume proportional to the level (1-10)."""
+  """Play confirmation chime at a volume proportional to the level (0-10)."""
   if not os.path.exists(CHIME_PATH):
     print(f"⚠️  Chime not found: {CHIME_PATH}", flush=True)
     return
   
   amplitude = volume_level / 10.0
-  if (volume_level == 0):
+  if (volume_level < 1):
     amplitude = 0.1  # minimal audible for volume 0
   
   try:
