@@ -12,5 +12,14 @@ module.exports = {
       retain: 3,
       compress: true,
     },
+    {
+      name: 'winterfresh-volume',
+      script: '.venv/bin/python',
+      args: ['-u', 'volume.py'],
+      cwd: '/home/winterfresh/winterfresh',
+      max_restarts: 10,
+      min_uptime: '5s',
+      restart_delay: 1000,
+    },
   ],
 };
