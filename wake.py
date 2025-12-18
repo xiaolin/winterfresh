@@ -18,6 +18,23 @@ WAKE_WORDS = [
 MAX_WAKE_WORDS = int(os.getenv("MAX_WAKE_WORDS", "4"))
 MIN_CONFIDENCE = float(os.getenv("MIN_WAKE_CONFIDENCE", "0.5"))
 
+# Extra grammar phrases that should NEVER trigger actions.
+# Purpose: reduce forced-decoding into wake/volume by giving the decoder other sinks.
+FILLER_PHRASES = [
+  "pineapple",
+  "calculator",
+  "microwave",
+  "strawberry",
+  "elephant",
+  "paper clip",
+  "traffic light",
+  "coffee mug",
+  "blue notebook",
+  "weather report",
+  "music playlist",
+  "random words",
+]
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(SCRIPT_DIR, "models/vosk-model-small-en-us-0.15")
 
@@ -32,8 +49,8 @@ IS_LINUX = sys.platform.startswith("linux")
 print("Loading Vosk model...", flush=True)
 model = Model(MODEL_PATH)
 
-# Combined grammar: wake words + volume commands
-ALL_PHRASES = WAKE_WORDS + volume.VOLUME_WORDS
+# Combined grammar: wake words + volume commands + filler sinks
+ALL_PHRASES = WAKE_WORDS + volume.VOLUME_WORDS + FILLER_PHRASES
 COMBINED_GRAMMAR = json.dumps(ALL_PHRASES)
 
 rec = KaldiRecognizer(model, SR, COMBINED_GRAMMAR)
@@ -51,7 +68,7 @@ def audio_level_bar(data, width=30):
 def downmix_to_mono(raw_bytes: bytes, channels: int) -> bytes:
   pcm = np.frombuffer(raw_bytes, dtype=np.int16)
   if channels > 1:
-    pcm = pcm.reshape(-1, channels).mean(axis=1).astype(np.int16)
+    pcm = pcm.reshape(-1, channels)[:, 0].astype(np.int16)  # pick ch0, don't average
   return pcm.tobytes()
 
 def handle_result(result: dict) -> bool:
@@ -70,14 +87,13 @@ def handle_result(result: dict) -> bool:
     # Even if parsing failed, don't fall through to wake (prevents false wakes).
     return False
 
-  # Check for volume command first (exact match, higher priority)
-  for volume_phrase in volume.VOLUME_WORDS:
-    if volume_phrase in text:
-      level = volume.parse_volume_level(text)
-      if level is not None:
-        print(f"\r🔊 Volume command: {text}                    ", flush=True)
-        volume.set_volume(level)
-        return False
+  # Volume command: EXACT match only
+  if text in volume.VOLUME_WORDS:
+    level = volume.parse_volume_level(text)
+    if level is not None:
+      print(f"\r🔊 Volume command: {text}                    ", flush=True)
+      volume.set_volume(level)
+    return False
 
   # Check for wake word (exact match from constrained grammar)
   for wake_phrase in WAKE_WORDS:
