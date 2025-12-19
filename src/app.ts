@@ -93,6 +93,22 @@ function getRunningOperations(): string[] {
   return Array.from(currentOperations);
 }
 
+function waitForOperationsCompleteAsync(): Promise<void> {
+  return new Promise((resolve) => {
+    if (currentOperations.size === 0) {
+      resolve();
+      return;
+    }
+
+    const checkInterval = setInterval(async () => {
+      if (currentOperations.size === 0) {
+        clearInterval(checkInterval);
+        resolve();
+      }
+    }, 200);
+  });
+}
+
 function trimHistory(messages: Msg[]) {
   const keep = 1 + MAX_TURNS * 2;
   if (messages.length > keep) {
@@ -114,9 +130,13 @@ function clearRestartTimeout() {
   }
 }
 
-function handleTTSSpeaking() {
+function addSpeakingOperation() {
   currentOperations.add('TTSSpeaking');
   clearRestartTimeout();
+}
+
+function clearSpeakingOperation() {
+  currentOperations.delete('TTSSpeaking');
 }
 
 function restartHistoryTimeout() {
@@ -138,6 +158,12 @@ function restartHistoryTimeout() {
 async function backToSleep() {
   isAppRunning = false; // stop app loop and let restart handle it
   await speakTTS('Alright, going back to sleep.');
+  await waitForOperationsCompleteAsync();
+  clearSpeakingOperation();
+  clearRestartTimeout();
+  clearSpeakingOperation();
+  killCurrentTTS();
+
   // Small buffer to ensure audio fully plays out
   await new Promise((resolve) => setTimeout(resolve, 500));
   await restart();
@@ -259,7 +285,7 @@ async function killCurrentTTS() {
       currentTtsProcess = null;
     }
   } finally {
-    currentOperations.delete('TTSSpeaking');
+    clearSpeakingOperation();
   }
 }
 
@@ -270,7 +296,7 @@ async function speakTTS(text: string) {
   // Kill any previous playback (safety)
   killCurrentTTS();
 
-  handleTTSSpeaking();
+  addSpeakingOperation();
 
   // Check cache first
   const cachedPath = await getCachedAudio(text, TTS_VOICE);
@@ -319,7 +345,7 @@ async function speakTTS(text: string) {
   if (reader && speakProcess.stdin) {
     try {
       while (true) {
-        handleTTSSpeaking();
+        addSpeakingOperation();
         const { done, value } = await reader.read();
         if (done) break;
         const chunk = Buffer.from(value);
@@ -519,6 +545,8 @@ async function startChatSession() {
 async function restart() {
   console.log('\n🔄 Restarting Winterfresh...');
   await stop();
+  // Small delay to ensure resources are freed
+  await new Promise((resolve) => setTimeout(resolve, 500));
   await start();
 }
 
