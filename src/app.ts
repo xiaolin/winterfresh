@@ -437,7 +437,7 @@ function isStopIntent(text: string): boolean {
   return STOP_INTENTS.some((phrase) => cmd.includes(phrase));
 }
 
-async function _startChatSession() {
+async function startChatSession() {
   const messages = conversationHistory;
 
   const historyAge =
@@ -447,9 +447,9 @@ async function _startChatSession() {
   await chimeWakeDetected();
 
   if (isReturning) {
-    speakTTS('Welcome back! How can I assist you further?');
+    await speakTTS('Welcome back! How can I assist you further?');
   } else {
-    speakTTS("What's up?");
+    await speakTTS("What's up?");
   }
 
   let abortPending = false;
@@ -527,11 +527,6 @@ async function _startChatSession() {
     })();
   }
 }
-
-const startChatSession = throttle(_startChatSession, APP_THROTTLE_MS, {
-  leading: true,
-  trailing: false,
-});
 
 async function restart() {
   console.log('\n🔄 Restarting Winterfresh...');
