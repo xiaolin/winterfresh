@@ -12,9 +12,11 @@ let processingLoopTimer: NodeJS.Timeout | null = null;
 let processingLoopRunning = false;
 
 function spawnPlayer(soundPath: string) {
-  return isLinux
-    ? spawn('aplay', ['-q', soundPath])
-    : spawn('play', ['-q', soundPath]);
+  // Use SoX `play` everywhere for consistent audio routing on Linux (Pulse/PipeWire setups).
+  // Also inherit stderr so failures aren't silent.
+  return spawn('play', ['-q', soundPath], {
+    stdio: ['ignore', 'ignore', 'inherit'],
+  });
 }
 
 export async function chimeWakeDetected() {
