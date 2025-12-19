@@ -408,7 +408,6 @@ async function activeSession() {
           cmd.includes('winterfresh stop')
         ) {
           console.log('🛑 Voice command: stop');
-          await speakTTS('Stop command detected');
           await backToSleep();
           return;
         }
