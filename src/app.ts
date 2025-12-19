@@ -48,6 +48,7 @@ const system: Msg = {
     - If a question is ambiguous, ask one clarifying question and wait.
     - If you don't know, say so clearly.
     - When listing steps or options, use bullet points.
+    - I am transcribing my speech, so you hear an audio transcription, not perfect text.
   `,
 };
 
