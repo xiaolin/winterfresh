@@ -1,4 +1,6 @@
 import sys, queue, json, os, subprocess
+import signal
+import time
 import numpy as np
 import sounddevice as sd
 from vosk import Model, KaldiRecognizer
@@ -81,7 +83,10 @@ def handle_result(result: dict) -> bool:
   return False
 
 def run_linux_arecord():
-  print(f"🎤 Listening for wake word + volume (device={LINUX_DEVICE}, ch={LINUX_CHANNELS}, sr={SR})", flush=True)
+  print(
+    f"🎤 Listening for wake word + volume (device={LINUX_DEVICE}, ch={LINUX_CHANNELS}, sr={SR})",
+    flush=True,
+  )
   print("-" * 50, flush=True)
 
   cmd = [
@@ -94,42 +99,81 @@ def run_linux_arecord():
     "-t", "raw",
   ]
 
-  proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+  proc = subprocess.Popen(
+    cmd,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    bufsize=0,
+    start_new_session=True,  # make arecord its own session/process-group
+  )
   assert proc.stdout is not None
 
   bytes_per_frame = 2 * LINUX_CHANNELS
   chunk_bytes = BLOCK * bytes_per_frame
 
-  while True:
-    raw = proc.stdout.read(chunk_bytes)
-    if raw == b"":
-      rc = proc.poll()
-      err = b""
-      try:
-        if proc.stderr is not None:
-          err = proc.stderr.read() or b""
-      except Exception:
-        pass
-      msg = err.decode("utf-8", errors="replace").strip()
-      print(f"AUDIO_ERROR: arecord exited (code={rc}). {msg}", file=sys.stderr, flush=True)
-      sys.exit(1)
+  def _drain_stderr(p: subprocess.Popen) -> str:
+    try:
+      if p.stderr is None:
+        return ""
+      data = p.stderr.read() or b""
+      return data.decode("utf-8", errors="replace").strip()
+    except Exception:
+      return ""
 
-    mono = downmix_to_mono(raw, LINUX_CHANNELS)
-    bar = audio_level_bar(mono)
+  def cleanup():
+    # Stop arecord cleanly, then hard-kill if it doesn't exit quickly.
+    try:
+      proc.terminate()
+    except Exception:
+      pass
 
-    if rec.AcceptWaveform(mono):
-      result = json.loads(rec.Result())
-      
-      if handle_result(result):
-        try:
-          proc.terminate()
-        except Exception:
-          pass
-        sys.exit(0)
-    else:
-      partial = json.loads(rec.PartialResult())
-      partial_text = partial.get("partial", "") or ""
-      print(f"\r{bar} | {partial_text[:30]:30s}", end="", flush=True)
+    deadline = time.time() + 0.5
+    while time.time() < deadline:
+      if proc.poll() is not None:
+        return
+      time.sleep(0.05)
+
+    try:
+      proc.kill()
+    except Exception:
+      pass
+
+  def on_signal(signum, frame):
+    cleanup()
+    sys.exit(0)
+
+  signal.signal(signal.SIGTERM, on_signal)
+  signal.signal(signal.SIGINT, on_signal)
+
+  try:
+    while True:
+      raw = proc.stdout.read(chunk_bytes)
+
+      # arecord ended or pipe broke
+      if raw == b"":
+        rc = proc.poll()
+        msg = _drain_stderr(proc)
+        print(
+          f"AUDIO_ERROR: arecord exited (code={rc}). {msg}",
+          file=sys.stderr,
+          flush=True,
+        )
+        sys.exit(1)
+
+      mono = downmix_to_mono(raw, LINUX_CHANNELS)
+      bar = audio_level_bar(mono)
+
+      if rec.AcceptWaveform(mono):
+        result = json.loads(rec.Result())
+        if handle_result(result):
+          cleanup()
+          sys.exit(0)
+      else:
+        partial = json.loads(rec.PartialResult())
+        partial_text = (partial.get("partial", "") or "")[:30]
+        print(f"\r{bar} | {partial_text:30s}", end="", flush=True)
+  finally:
+    cleanup()
 
 def run_non_linux_sounddevice():
   q = queue.Queue()

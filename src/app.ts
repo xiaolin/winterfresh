@@ -197,7 +197,7 @@ async function recordUntilSilence(
       silenceDuration,
       SILENCE_THRESHOLD,
     ],
-    { stdio: 'inherit' },
+    { stdio: 'inherit', detached: IS_LINUX }, // detached for process group on Linux
   );
 
   currentRecProcess = recordProcess;
