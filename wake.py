@@ -5,6 +5,7 @@ from vosk import Model, KaldiRecognizer
 
 # Import volume control
 import volume
+import filler_words
 
 WAKE_WORDS = [
   'winter fresh',
@@ -18,23 +19,6 @@ WAKE_WORDS = [
 
 MAX_WAKE_WORDS = int(os.getenv("MAX_WAKE_WORDS", "4"))
 MIN_CONFIDENCE = float(os.getenv("MIN_WAKE_CONFIDENCE", "0.5"))
-
-# Extra grammar phrases that should NEVER trigger actions.
-# Purpose: reduce forced-decoding into wake/volume by giving the decoder other sinks.
-FILLER_PHRASES = [
-  "pineapple",
-  "calculator",
-  "microwave",
-  "strawberry",
-  "elephant",
-  "paper clip",
-  "traffic light",
-  "coffee mug",
-  "blue notebook",
-  "weather report",
-  "music playlist",
-  "random words",
-]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(SCRIPT_DIR, "models/vosk-model-small-en-us-0.15")
@@ -51,7 +35,7 @@ print("Loading Vosk model...", flush=True)
 model = Model(MODEL_PATH)
 
 # Combined grammar: wake words + volume commands + filler sinks
-ALL_PHRASES = WAKE_WORDS + volume.VOLUME_WORDS + FILLER_PHRASES
+ALL_PHRASES = WAKE_WORDS + volume.VOLUME_WORDS + filler_words.FILLER_PHRASES
 COMBINED_GRAMMAR = json.dumps(ALL_PHRASES)
 
 rec = KaldiRecognizer(model, SR, COMBINED_GRAMMAR)

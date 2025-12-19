@@ -45,3 +45,5 @@ coverage/
 .nyc_output/
 
 debug.txt
+
+audio_cache/

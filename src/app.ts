@@ -19,6 +19,8 @@ import {
   resetErrorCounter,
 } from './cleanup.js';
 
+import { getCachedAudio, cacheAudio, CACHED_PHRASES } from './tts-cache.js';
+
 const IS_LINUX = process.platform === 'linux';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '24000';
@@ -36,8 +38,10 @@ const system: Msg = {
   role: 'system',
   content: `
     You are Winterfresh, a fast, concise home voice assistant.
-
+    
     Rules:
+    - VERY IMPORTANT: If you get the sentiment based on my response like "stop", "thats enough", "I got it", etc...
+      that I don't want more information, respond exactly with "shutting down" and stop further responses.
     - Default to one or two sentences if possible, unless more detail is requested.
     - Be direct and honest. Never sugarcoat, never be rude.
     - Match depth to the question:
@@ -51,8 +55,9 @@ const system: Msg = {
 };
 
 const MAX_TURNS = Number(process.env.WINTERFRESH_MAX_TURNS ?? 20);
-const IDLE_TIMEOUT_MS = 10000; // 10 seconds
+const IDLE_TIMEOUT_MS = 7000; // 7 seconds
 const HISTORY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const TTS_VOICE = 'alloy';
 
 let currentTtsProcess: ReturnType<typeof spawn> | null = null;
 let currentRecProcess: ReturnType<typeof spawn> | null = null;
@@ -69,10 +74,10 @@ type Operation = 'TTSSpeaking' | 'ActiveAsking';
 const currentOperations = new Set<Operation>();
 
 // Goal: make quiet speech reliably transcribable and avoid early cutoff.
-const SILENCE_THRESHOLD = '0.5%'; // was 2% (too aggressive for quiet speech)
-const SILENCE_DURATION_SEC = '1.5'; // was 1.0 (cuts off mid-sentence pauses)
-const INPUT_VOLUME = 3; // Linux only (linear factor)
-const MAC_GAIN_DB = 9; // ~20*log10(3) = +9.54 dB
+const SILENCE_THRESHOLD = '2.0';
+const SILENCE_DURATION_SEC = '1.5';
+const INPUT_VOLUME = 2; // Linux only (linear factor)
+const MAC_GAIN_DB = 6; // ~20*log10(2) = +6.02 dB
 
 function normalizeSpokenCommand(text: string): string {
   return (text ?? '')
@@ -129,7 +134,10 @@ function restartHistoryTimeout() {
 }
 
 async function backToSleep() {
+  // Speak FIRST, then restart (which will kill TTS, but it's already done)
   await speakTTS('Alright, going back to sleep.');
+  // Small buffer to ensure audio fully plays out
+  await new Promise((resolve) => setTimeout(resolve, 500));
   await restart();
 }
 
@@ -270,12 +278,40 @@ async function speakTTS(text: string) {
   killCurrentTTS();
 
   handleTTSSpeaking();
+
+  // Check cache first
+  const cachedPath = await getCachedAudio(text, TTS_VOICE);
+  if (cachedPath) {
+    console.log(
+      '🔊 Playing cached TTS:',
+      text.slice(0, 30) + (text.length > 30 ? '...' : ''),
+    );
+    const speakProcess = spawn('play', ['-q', cachedPath], {
+      stdio: ['pipe', 'inherit', 'inherit'],
+    });
+    currentTtsProcess = speakProcess;
+
+    try {
+      await Promise.race([
+        once(speakProcess, 'exit'),
+        once(speakProcess, 'close'),
+      ]);
+    } finally {
+      killCurrentTTS();
+    }
+    return;
+  }
+
+  // Not cached - fetch from API
   const audio = await client.audio.speech.create({
     model: TTS_MODEL,
-    voice: 'alloy',
+    voice: TTS_VOICE,
     input: text,
     response_format: 'mp3',
   });
+
+  // Collect audio data for caching
+  const chunks: Buffer[] = [];
 
   const speakProcess = spawn('play', ['-q', '-t', 'mp3', '-'], {
     stdio: ['pipe', 'inherit', 'inherit'],
@@ -293,8 +329,10 @@ async function speakTTS(text: string) {
         handleTTSSpeaking();
         const { done, value } = await reader.read();
         if (done) break;
+        const chunk = Buffer.from(value);
+        chunks.push(chunk);
         if (!speakProcess.stdin.destroyed) {
-          speakProcess.stdin.write(Buffer.from(value));
+          speakProcess.stdin.write(chunk);
         } else {
           break;
         }
@@ -314,6 +352,18 @@ async function speakTTS(text: string) {
     ]);
   } finally {
     killCurrentTTS();
+  }
+
+  // Cache if this is a common phrase (or all short phrases)
+  const fullAudio = Buffer.concat(chunks);
+  if (fullAudio.length > 0 && CACHED_PHRASES.includes(text)) {
+    await cacheAudio(text, TTS_VOICE, fullAudio).catch((err) => {
+      console.error('Failed to cache TTS:', err);
+    });
+    console.log(
+      '💾 Cached TTS:',
+      text.slice(0, 30) + (text.length > 30 ? '...' : ''),
+    );
   }
 }
 
@@ -354,6 +404,32 @@ async function waitForWakeWord(): Promise<void> {
   });
 }
 
+const STOP_INTENTS = [
+  'stop',
+  'shut up',
+  'be quiet',
+  'quiet',
+  'enough',
+  "that's enough",
+  'thats enough',
+  'i got it',
+  'got it',
+  'never mind',
+  'nevermind',
+  'cancel',
+  'go away',
+  'go to sleep',
+  'goodbye',
+  'bye',
+  'winter fresh stop',
+  'winterfresh stop',
+];
+
+function isStopIntent(text: string): boolean {
+  const cmd = normalizeSpokenCommand(text);
+  return STOP_INTENTS.some((phrase) => cmd.includes(phrase));
+}
+
 async function activeSession() {
   const messages = conversationHistory;
 
@@ -366,7 +442,7 @@ async function activeSession() {
   if (isReturning) {
     speakTTS('Welcome back! How can I assist you further?');
   } else {
-    speakTTS('Whats up?');
+    speakTTS("What's up?");
   }
 
   let abortPending = false;
@@ -401,12 +477,9 @@ async function activeSession() {
 
         if (!isAppRunning || abortPending) return;
 
-        const cmd = normalizeSpokenCommand(text);
-        if (
-          cmd.includes('winter fresh stop') ||
-          cmd.includes('winterfresh stop')
-        ) {
-          console.log('🛑 Voice command: stop');
+        // Check for stop intent (before calling chat)
+        if (isStopIntent(text)) {
+          console.log('🛑 Stop intent detected:', text);
           await backToSleep();
           return;
         }
@@ -422,6 +495,12 @@ async function activeSession() {
         trimHistory(messages);
 
         const reply = await chat(messages);
+        const replyCmd = normalizeSpokenCommand(reply);
+        if (replyCmd.includes('shutting down')) {
+          console.log('🛑 Winterfresh shutting down per user request.');
+          await backToSleep();
+          return;
+        }
         if (!isAppRunning || abortPending) return;
 
         console.log('Winterfresh:', reply);
@@ -483,10 +562,21 @@ async function stop() {
   console.log('\n🛑 Stopping Winterfresh...');
   isAppRunning = false;
 
-  // Kill TTS process if running
+  // Wait for current TTS to finish naturally (up to 5s) before killing
   if (currentTtsProcess) {
-    currentTtsProcess.kill('SIGKILL');
-    currentTtsProcess = null;
+    const ttsProc = currentTtsProcess;
+    const ttsFinished = Promise.race([
+      once(ttsProc, 'exit'),
+      once(ttsProc, 'close'),
+      new Promise((resolve) => setTimeout(resolve, 5000)), // max wait
+    ]);
+    await ttsFinished;
+
+    // Now safe to force-kill if still running
+    if (currentTtsProcess) {
+      currentTtsProcess.kill('SIGKILL');
+      currentTtsProcess = null;
+    }
   }
 
   // Kill recording process if running
