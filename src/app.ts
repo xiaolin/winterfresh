@@ -403,7 +403,10 @@ async function activeSession() {
         if (!isAppRunning || abortPending) return;
 
         const cmd = normalizeSpokenCommand(text);
-        if (cmd === 'winter fresh stop' || cmd === 'winterfresh stop') {
+        if (
+          cmd.includes('winter fresh stop') ||
+          cmd.includes('winterfresh stop')
+        ) {
           console.log('🛑 Voice command: stop');
           await speakTTS('Stop command detected');
           await backToSleep();
