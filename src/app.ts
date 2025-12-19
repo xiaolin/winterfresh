@@ -132,7 +132,7 @@ function restartHistoryTimeout() {
 
 async function backToSleep() {
   await speakTTS('Alright, going back to sleep.');
-  restart();
+  await restart();
 }
 
 async function recordUntilSilence(
