@@ -147,44 +147,30 @@ async function recordUntilSilence(
   silenceDuration: string = SILENCE_DURATION_SEC,
 ): Promise<boolean> {
   // Return whether recording completed normally
-  const recordProcess = IS_LINUX
-    ? spawn(
-        'bash',
-        [
-          '-lc',
-          [
-            `set -o pipefail;`,
-            `arecord -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
-            `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 "${outPath}"`,
-            `silence 1 0.05 ${SILENCE_THRESHOLD} 1 ${silenceDuration} ${SILENCE_THRESHOLD}`,
-          ].join(' '),
-        ],
-        { stdio: 'inherit', detached: true },
-      )
-    : spawn(
-        'rec',
-        [
-          '-G', // guard against clipping
-          '-D', // disable dithering (avoids "dither clipped" warnings)
-          '-c',
-          '1',
-          '-r',
-          SAMPLE_RATE,
-          '-b',
-          '16',
-          outPath,
-          'gain',
-          String(MAC_GAIN_DB),
-          'silence',
-          '1',
-          '0.05',
-          SILENCE_THRESHOLD,
-          '1',
-          silenceDuration,
-          SILENCE_THRESHOLD,
-        ],
-        { stdio: 'inherit' },
-      );
+  const recordProcess = spawn(
+    'rec',
+    [
+      '-G', // guard against clipping
+      '-D', // disable dithering (avoids "dither clipped" warnings)
+      '-c',
+      '1',
+      '-r',
+      SAMPLE_RATE,
+      '-b',
+      '16',
+      outPath,
+      'gain',
+      String(MAC_GAIN_DB),
+      'silence',
+      '1',
+      '0.05',
+      SILENCE_THRESHOLD,
+      '1',
+      silenceDuration,
+      SILENCE_THRESHOLD,
+    ],
+    { stdio: 'inherit' },
+  );
 
   currentRecProcess = recordProcess;
   let killedByTimeout = false;
