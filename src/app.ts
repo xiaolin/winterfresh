@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import OpenAI, { toFile } from 'openai';
+import { throttle } from 'lodash-es';
 
 import {
   chimeWakeDetected,
@@ -56,6 +57,7 @@ const system: Msg = {
 
 const MAX_TURNS = Number(process.env.WINTERFRESH_MAX_TURNS ?? 20);
 const IDLE_TIMEOUT_MS = 7000; // 7 seconds
+const APP_THROTTLE_MS = IDLE_TIMEOUT_MS - 2000;
 const HISTORY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const TTS_VOICE = 'alloy';
 
@@ -367,7 +369,7 @@ async function speakTTS(text: string) {
   }
 }
 
-async function waitForWakeWord(): Promise<void> {
+async function _waitForWakeWord(): Promise<void> {
   console.log('\n🎤 Listening for wake word (local Vosk)...');
 
   const pythonPath = path.join(process.cwd(), '.venv', 'bin', 'python');
@@ -404,6 +406,11 @@ async function waitForWakeWord(): Promise<void> {
   });
 }
 
+const waitForWakeWord = throttle(_waitForWakeWord, APP_THROTTLE_MS, {
+  leading: true,
+  trailing: false,
+});
+
 const STOP_INTENTS = [
   'stop',
   'shut up',
@@ -430,7 +437,7 @@ function isStopIntent(text: string): boolean {
   return STOP_INTENTS.some((phrase) => cmd.includes(phrase));
 }
 
-async function activeSession() {
+async function _startChatSession() {
   const messages = conversationHistory;
 
   const historyAge =
@@ -521,6 +528,11 @@ async function activeSession() {
   }
 }
 
+const startChatSession = throttle(_startChatSession, APP_THROTTLE_MS, {
+  leading: true,
+  trailing: false,
+});
+
 async function restart() {
   console.log('\n🔄 Restarting Winterfresh...');
   await stop();
@@ -602,7 +614,7 @@ async function start() {
 
       recordSuccess(); // Wake word detection succeeded
 
-      await activeSession();
+      await startChatSession();
       if (!isAppRunning) break;
 
       recordSuccess(); // Session completed successfully
