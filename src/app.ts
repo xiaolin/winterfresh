@@ -478,6 +478,7 @@ async function startChatSession() {
 
     chimeProcessingStart();
     console.log('Processing voice input...');
+    clearRestartTimeout();
 
     // If killed by timeout, exit - restart() was already called
     if (!voiceRecCompletedNormally) {
