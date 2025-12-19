@@ -462,6 +462,9 @@ async function startChatSession() {
       SILENCE_DURATION_SEC,
     );
 
+    chimeProcessingStart();
+    console.log('Processing voice input...');
+
     // If killed by timeout, exit - restart() was already called
     if (!voiceRecCompletedNormally) {
       fs.unlink(wavPath).catch(() => {});
@@ -475,7 +478,6 @@ async function startChatSession() {
     // add await to block until tts is done
     await (async () => {
       abortPending = false;
-      chimeProcessingStart();
 
       try {
         const text = await transcribe(wavPath);
