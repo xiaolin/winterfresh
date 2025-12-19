@@ -393,7 +393,8 @@ async function activeSession() {
 
     abortPending = true;
 
-    (async () => {
+    // add await to block until tts is done
+    await (async () => {
       abortPending = false;
       chimeProcessingStart();
 
