@@ -4,7 +4,6 @@ import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import OpenAI, { toFile } from 'openai';
-import { throttle } from 'lodash-es';
 
 import {
   chimeWakeDetected,
@@ -57,7 +56,6 @@ const system: Msg = {
 
 const MAX_TURNS = Number(process.env.WINTERFRESH_MAX_TURNS ?? 20);
 const IDLE_TIMEOUT_MS = 7000; // 7 seconds
-const APP_THROTTLE_MS = IDLE_TIMEOUT_MS - 2000;
 const HISTORY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const TTS_VOICE = 'alloy';
 
@@ -136,7 +134,7 @@ function restartHistoryTimeout() {
 }
 
 async function backToSleep() {
-  // Speak FIRST, then restart (which will kill TTS, but it's already done)
+  isAppRunning = false; // stop app loop and let restart handle it
   await speakTTS('Alright, going back to sleep.');
   // Small buffer to ensure audio fully plays out
   await new Promise((resolve) => setTimeout(resolve, 500));
@@ -216,6 +214,11 @@ async function recordUntilSilence(
           restartTimeout = null;
           killedByTimeout = true;
           killCurrentRecProcess();
+          console.log(
+            `No voice detected for ${
+              timeoutMs / 1000
+            } seconds, going back to sleep.`,
+          );
           await backToSleep();
         }, timeoutMs);
       }
@@ -369,7 +372,7 @@ async function speakTTS(text: string) {
   }
 }
 
-async function _waitForWakeWord(): Promise<void> {
+async function waitForWakeWord(): Promise<void> {
   console.log('\n🎤 Listening for wake word (local Vosk)...');
 
   const pythonPath = path.join(process.cwd(), '.venv', 'bin', 'python');
@@ -405,11 +408,6 @@ async function _waitForWakeWord(): Promise<void> {
     });
   });
 }
-
-const waitForWakeWord = throttle(_waitForWakeWord, APP_THROTTLE_MS, {
-  leading: true,
-  trailing: false,
-});
 
 const STOP_INTENTS = [
   'stop',
@@ -454,7 +452,7 @@ async function startChatSession() {
 
   let abortPending = false;
 
-  while (true) {
+  while (true && isAppRunning) {
     console.log('\n--- Speak now (auto-stops on silence) ---');
     const wavPath = `/tmp/winterfresh-in-${Date.now()}.wav`;
 
@@ -531,7 +529,6 @@ async function startChatSession() {
 async function restart() {
   console.log('\n🔄 Restarting Winterfresh...');
   await stop();
-  await new Promise((resolve) => setTimeout(resolve, 1000)); // Wait for cleanup
   await start();
 }
 
@@ -619,7 +616,7 @@ async function start() {
         if (shouldRestart) {
           console.log('🔄 Attempting recovery restart...');
           await restart();
-          return; // Exit this start() call, restart() will call start() again
+          return;
         }
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
@@ -639,11 +636,13 @@ async function main() {
 
   // Handle graceful shutdown
   process.on('SIGINT', async () => {
+    console.log('\n🛑 SIGINT received, shutting down Winterfresh...');
     await stop();
     process.exit(0);
   });
 
   process.on('SIGTERM', async () => {
+    console.log('\n🛑 SIGTERM received, shutting down Winterfresh...');
     await stop();
     process.exit(0);
   });
