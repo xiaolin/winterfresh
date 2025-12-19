@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import os from 'node:os';
 
 // Recovery settings
-const MAX_CONSECUTIVE_ERRORS = 5;
+const MAX_CONSECUTIVE_ERRORS = 3;
 
 // Error tracking state
 let consecutiveErrors = 0;
