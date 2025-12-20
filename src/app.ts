@@ -24,6 +24,9 @@ import { getCachedAudio, cacheAudio, CACHED_PHRASES } from './tts-cache.js';
 const IS_LINUX = process.platform === 'linux';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '24000';
+const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'plughw:2,0';
+const LINUX_ARECORD_RATE = process.env.ARECORD_RATE ?? '16000';
+const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '2';
 const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-4o-mini';
 const TRANSCRIBE_MODEL =
   process.env.TRANSCRIBE_MODEL ?? 'gpt-4o-mini-transcribe';
@@ -78,7 +81,8 @@ const currentOperations = new Set<Operation>();
 const SILENCE_THRESHOLD = '2.0';
 // How long silence must persist to stop recording
 // '1.0' means recording stops after 1.0 seconds of continuous silence
-const SILENCE_DURATION_SEC = '1.5';
+const SILENCE_DURATION_SEC = '1.0';
+const INPUT_VOLUME = 2; // Linux only (linear factor)
 const MAC_GAIN_DB = 6; // ~20*log10(2) = +6.02 dB
 
 function normalizeSpokenCommand(text: string): string {
@@ -175,30 +179,44 @@ async function recordUntilSilence(
   silenceDuration: string = SILENCE_DURATION_SEC,
 ): Promise<boolean> {
   // Return whether recording completed normally
-  const recordProcess = spawn(
-    'rec',
-    [
-      '-G', // guard against clipping
-      '-D', // disable dithering (avoids "dither clipped" warnings)
-      '-c',
-      '1',
-      '-r',
-      SAMPLE_RATE,
-      '-b',
-      '16',
-      outPath,
-      'gain',
-      String(MAC_GAIN_DB),
-      'silence',
-      '1',
-      '0.05',
-      SILENCE_THRESHOLD,
-      '1',
-      silenceDuration,
-      SILENCE_THRESHOLD,
-    ],
-    { stdio: 'inherit', detached: IS_LINUX }, // detached for process group on Linux
-  );
+  const recordProcess = IS_LINUX
+    ? spawn(
+        'bash',
+        [
+          '-lc',
+          [
+            `set -o pipefail;`,
+            `arecord -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
+            `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 "${outPath}"`,
+            `silence 1 0.05 ${SILENCE_THRESHOLD} 1 ${silenceDuration} ${SILENCE_THRESHOLD}`,
+          ].join(' '),
+        ],
+        { stdio: 'inherit', detached: true },
+      )
+    : spawn(
+        'rec',
+        [
+          '-G', // guard against clipping
+          '-D', // disable dithering (avoids "dither clipped" warnings)
+          '-c',
+          '1',
+          '-r',
+          SAMPLE_RATE,
+          '-b',
+          '16',
+          outPath,
+          'gain',
+          String(MAC_GAIN_DB),
+          'silence',
+          '1',
+          '0.05',
+          SILENCE_THRESHOLD,
+          '1',
+          silenceDuration,
+          SILENCE_THRESHOLD,
+        ],
+        { stdio: 'inherit', detached: IS_LINUX }, // detached for process group on Linux
+      );
 
   currentRecProcess = recordProcess;
   let killedByTimeout = false;
