@@ -26,7 +26,7 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '24000';
 const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'plughw:2,0';
 const LINUX_ARECORD_RATE = process.env.ARECORD_RATE ?? '16000';
-const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '2';
+const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '1';
 const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-4o-mini';
 const TRANSCRIBE_MODEL =
   process.env.TRANSCRIBE_MODEL ?? 'gpt-4o-mini-transcribe';
