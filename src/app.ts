@@ -176,14 +176,8 @@ async function backToSleep() {
 async function recordUntilSilenceBytes(
   timeoutMs?: number,
   silenceDuration: string = SILENCE_DURATION_SEC,
-): Promise<{
-  completedNormally: boolean;
-  audioBytes: Buffer | null;
-  filename: string;
-}> {
-  // Returns encoded audio bytes captured until silence; null if timed out.
-  const filename = 'winterfresh-in.flac';
-
+): Promise<{ completedNormally: boolean; wavBytes: Buffer | null }> {
+  // Returns WAV bytes captured until silence; null if timed out.
   const recordProcess = IS_LINUX
     ? spawn(
         'bash',
@@ -192,8 +186,7 @@ async function recordUntilSilenceBytes(
           [
             `set -o pipefail;`,
             `arecord -q -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
-            // encode to FLAC to reduce upload size
-            `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t flac -c 1 -`,
+            `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 -`,
             `silence 1 0.05 ${SILENCE_THRESHOLD} 1 ${silenceDuration} ${SILENCE_THRESHOLD}`,
           ].join(' '),
         ],
@@ -211,8 +204,8 @@ async function recordUntilSilenceBytes(
           '-b',
           '16',
           '-t',
-          'flac',
-          '-', // FLAC to stdout
+          'wav',
+          '-', // WAV to stdout
           'gain',
           String(MAC_GAIN_DB),
           'silence',
@@ -231,6 +224,10 @@ async function recordUntilSilenceBytes(
   let killedByTimeout = false;
   const chunks: Buffer[] = [];
   let bytesOut = 0;
+
+  recordProcess.on('error', (err) => {
+    console.error('❌ Recording process error:', err);
+  });
 
   recordProcess.stdout?.on('data', (buf: Buffer) => {
     chunks.push(buf);
@@ -258,6 +255,11 @@ async function recordUntilSilenceBytes(
         restartTimeout = null;
         killedByTimeout = true;
         killCurrentRecProcess();
+        console.log(
+          `No voice detected for ${
+            timeoutMs / 1000
+          } seconds, going back to sleep.`,
+        );
         await backToSleep();
       }, timeoutMs);
     }
@@ -275,24 +277,20 @@ async function recordUntilSilenceBytes(
     if (currentRecProcess === recordProcess) currentRecProcess = null;
   }
 
-  if (killedByTimeout)
-    return { completedNormally: false, audioBytes: null, filename };
+  if (killedByTimeout) return { completedNormally: false, wavBytes: null };
 
-  const audioBytes = Buffer.concat(chunks);
+  const wavBytes = Buffer.concat(chunks);
   return {
     completedNormally: true,
-    audioBytes: audioBytes.length ? audioBytes : null,
-    filename,
+    // store wav in memory for quicker processing
+    wavBytes: wavBytes.length ? wavBytes : null,
   };
 }
 
-async function transcribeBytes(
-  audioBytes: Buffer,
-  filename: string,
-): Promise<string> {
+async function transcribeBytes(wavBytes: Buffer): Promise<string> {
   const resp = await client.audio.transcriptions.create({
     model: TRANSCRIBE_MODEL,
-    file: await toFile(audioBytes, filename),
+    file: await toFile(wavBytes, 'winterfresh-in.wav'),
   });
   return (resp.text ?? '').trim();
 }
@@ -319,10 +317,8 @@ async function killCurrentTTS() {
 async function speakTTS(text: string) {
   // Stop processing chime when TTS starts
   chimeProcessingStop();
-
   // Kill any previous playback (safety)
   killCurrentTTS();
-
   addSpeakingOperation();
 
   // Check cache first
@@ -495,10 +491,11 @@ async function startChatSession() {
 
   while (true && isAppRunning) {
     console.log('\n--- Speak now (auto-stops on silence) ---');
-    const wavPath = `/tmp/winterfresh-in-${Date.now()}.wav`;
 
-    const { completedNormally, audioBytes, filename } =
-      await recordUntilSilenceBytes(IDLE_TIMEOUT_MS, SILENCE_DURATION_SEC);
+    const { completedNormally, wavBytes } = await recordUntilSilenceBytes(
+      IDLE_TIMEOUT_MS,
+      SILENCE_DURATION_SEC,
+    );
 
     chimeProcessingStart();
     console.log('Processing voice input...');
@@ -508,7 +505,7 @@ async function startChatSession() {
     if (!isAppRunning) return;
 
     // Nothing captured (e.g., very short noise / process ended before output)
-    if (!audioBytes || audioBytes.length === 0) {
+    if (!wavBytes || wavBytes.length === 0) {
       chimeProcessingStop();
       continue;
     }
@@ -520,7 +517,7 @@ async function startChatSession() {
       abortPending = false;
 
       try {
-        const text = await transcribeBytes(audioBytes, filename);
+        const text = await transcribeBytes(wavBytes);
 
         if (!isAppRunning || abortPending) return;
 
@@ -560,9 +557,8 @@ async function startChatSession() {
         await speakTTS(reply);
       } catch (err) {
         console.error('Processing error:', err);
-        chimeProcessingStop();
       } finally {
-        fs.unlink(wavPath).catch(() => {});
+        chimeProcessingStop();
       }
     })();
   }
