@@ -325,13 +325,9 @@ async function speakTTS(text: string) {
   killCurrentTTS();
   addSpeakingOperation();
 
-  // Check cache first
   const cachedPath = await getCachedAudio(text, TTS_VOICE);
   if (cachedPath) {
-    console.log(
-      '🔊 Playing cached TTS:',
-      text.slice(0, 30) + (text.length > 30 ? '...' : ''),
-    );
+    console.log('⏱️ tts(cache)=hit');
     const speakProcess = spawn('play', ['-q', cachedPath], {
       stdio: ['pipe', 'inherit', 'inherit'],
     });
@@ -348,17 +344,17 @@ async function speakTTS(text: string) {
     return;
   }
 
-  // Not cached - fetch from API
+  const tReq = performance.now();
   const audio = await client.audio.speech.create({
     model: TTS_MODEL,
     voice: TTS_VOICE,
     input: text,
     response_format: 'mp3',
   });
+  const tResp = performance.now();
+  console.log(`⏱️ tts(api)=${ms(tResp - tReq)}`);
 
-  // Collect audio data for caching
   const chunks: Buffer[] = [];
-
   const speakProcess = spawn('play', ['-q', '-t', 'mp3', '-'], {
     stdio: ['pipe', 'inherit', 'inherit'],
   });
@@ -369,25 +365,37 @@ async function speakTTS(text: string) {
   }
 
   const reader = audio.body?.getReader();
+  let tFirstByte: number | null = null;
+  let tFirstWrite: number | null = null;
+
   if (reader && speakProcess.stdin) {
     try {
       while (true) {
         addSpeakingOperation();
         const { done, value } = await reader.read();
         if (done) break;
+
+        if (tFirstByte === null) {
+          tFirstByte = performance.now();
+          console.log(`⏱️ tts(ttfb)=${ms(tFirstByte - tReq)}`);
+        }
+
         const chunk = Buffer.from(value);
         chunks.push(chunk);
+
         if (!speakProcess.stdin.destroyed) {
+          if (tFirstWrite === null) {
+            tFirstWrite = performance.now();
+            console.log(`⏱️ tts(first-write)=${ms(tFirstWrite - tReq)}`);
+          }
           speakProcess.stdin.write(chunk);
         } else {
           break;
         }
       }
-      if (!speakProcess.stdin.destroyed) {
-        speakProcess.stdin.end();
-      }
-    } catch (err) {
-      // Handle interruption gracefully
+      if (!speakProcess.stdin.destroyed) speakProcess.stdin.end();
+    } catch {
+      // interrupted
     }
   }
 
@@ -397,19 +405,16 @@ async function speakTTS(text: string) {
       once(speakProcess, 'close'),
     ]);
   } finally {
+    const tDone = performance.now();
+    if (tFirstWrite !== null) {
+      console.log(`⏱️ tts(playback)=${ms(tDone - tFirstWrite)}`);
+    }
     killCurrentTTS();
   }
 
-  // Cache if this is a common phrase (or all short phrases)
   const fullAudio = Buffer.concat(chunks);
   if (fullAudio.length > 0 && CACHED_PHRASES.includes(text)) {
-    await cacheAudio(text, TTS_VOICE, fullAudio).catch((err) => {
-      console.error('Failed to cache TTS:', err);
-    });
-    console.log(
-      '💾 Cached TTS:',
-      text.slice(0, 30) + (text.length > 30 ? '...' : ''),
-    );
+    await cacheAudio(text, TTS_VOICE, fullAudio).catch(() => {});
   }
 }
 
