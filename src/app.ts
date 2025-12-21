@@ -80,8 +80,8 @@ const currentOperations = new Set<Operation>();
 // '2.0' means audio below 2% of max volume is silence
 const SILENCE_THRESHOLD = '2.0';
 // How long silence must persist to stop recording
-// '1.0' means recording stops after 1.0 seconds of continuous silence
-const SILENCE_DURATION_SEC = '1.0';
+// '0.8' means recording stops after 0.8 seconds of continuous silence
+const SILENCE_DURATION_SEC = '0.7';
 const INPUT_VOLUME = 2; // Linux only (linear factor)
 const MAC_GAIN_DB = 6; // ~20*log10(2) = +6.02 dB
 
