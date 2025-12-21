@@ -85,6 +85,10 @@ const SILENCE_DURATION_SEC = '1.0';
 const INPUT_VOLUME = 2; // Linux only (linear factor)
 const MAC_GAIN_DB = 6; // ~20*log10(2) = +6.02 dB
 
+function ms(n: number) {
+  return `${Math.round(n)}ms`;
+}
+
 function normalizeSpokenCommand(text: string): string {
   return (text ?? '')
     .toLowerCase()
@@ -517,7 +521,13 @@ async function startChatSession() {
       abortPending = false;
 
       try {
+        const t0 = performance.now();
+        // transcribe audio that was recorded
         const text = await transcribeBytes(wavBytes);
+        const t1 = performance.now();
+        console.log(
+          `⏱️ transcribeBytes=${ms(t1 - t0)} (bytes=${wavBytes.length})`,
+        );
 
         if (!isAppRunning || abortPending) return;
 
@@ -538,7 +548,12 @@ async function startChatSession() {
         messages.push({ role: 'user', content: text });
         trimHistory(messages);
 
+        const t2 = performance.now();
+        // get reply from chat
         const reply = await chat(messages);
+        const t3 = performance.now();
+        console.log(`⏱️ chat=${ms(t3 - t2)}`);
+
         const replyCmd = normalizeSpokenCommand(reply);
         if (replyCmd.includes('shutting down')) {
           console.log('🛑 Winterfresh shutting down per user request.');
@@ -554,7 +569,11 @@ async function startChatSession() {
 
         restartHistoryTimeout();
 
+        // speak reply from chat
+        const t4 = performance.now();
         await speakTTS(reply);
+        const t5 = performance.now();
+        console.log(`⏱️ speakTTS(total)=${ms(t5 - t4)}`);
       } catch (err) {
         console.error('Processing error:', err);
       } finally {
