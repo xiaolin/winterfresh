@@ -23,7 +23,7 @@ import { getCachedAudio, cacheAudio, CACHED_PHRASES } from './tts-cache.js';
 
 const IS_LINUX = process.platform === 'linux';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '24000';
+const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '16000';
 const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'plughw:2,0';
 const LINUX_ARECORD_RATE = process.env.ARECORD_RATE ?? '16000';
 const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '1';
@@ -173,12 +173,17 @@ async function backToSleep() {
   await restart();
 }
 
-async function recordUntilSilence(
-  outPath: string,
+async function recordUntilSilenceBytes(
   timeoutMs?: number,
   silenceDuration: string = SILENCE_DURATION_SEC,
-): Promise<boolean> {
-  // Return whether recording completed normally
+): Promise<{
+  completedNormally: boolean;
+  audioBytes: Buffer | null;
+  filename: string;
+}> {
+  // Returns encoded audio bytes captured until silence; null if timed out.
+  const filename = 'winterfresh-in.flac';
+
   const recordProcess = IS_LINUX
     ? spawn(
         'bash',
@@ -186,25 +191,28 @@ async function recordUntilSilence(
           '-lc',
           [
             `set -o pipefail;`,
-            `arecord -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
-            `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 "${outPath}"`,
+            `arecord -q -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
+            // encode to FLAC to reduce upload size
+            `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t flac -c 1 -`,
             `silence 1 0.05 ${SILENCE_THRESHOLD} 1 ${silenceDuration} ${SILENCE_THRESHOLD}`,
           ].join(' '),
         ],
-        { stdio: 'inherit', detached: true },
+        { stdio: ['ignore', 'pipe', 'inherit'], detached: true },
       )
     : spawn(
         'rec',
         [
-          '-G', // guard against clipping
-          '-D', // disable dithering (avoids "dither clipped" warnings)
+          '-G',
+          '-D',
           '-c',
           '1',
           '-r',
           SAMPLE_RATE,
           '-b',
           '16',
-          outPath,
+          '-t',
+          'flac',
+          '-', // FLAC to stdout
           'gain',
           String(MAC_GAIN_DB),
           'silence',
@@ -215,47 +223,43 @@ async function recordUntilSilence(
           silenceDuration,
           SILENCE_THRESHOLD,
         ],
-        { stdio: 'inherit', detached: IS_LINUX }, // detached for process group on Linux
+        { stdio: ['ignore', 'pipe', 'inherit'], detached: false },
       );
 
   currentRecProcess = recordProcess;
-  let killedByTimeout = false;
 
-  // Detect spawn errors (mic disconnected, permission issues, etc.)
-  recordProcess.on('error', (err) => {
-    console.error('❌ Recording process error:', err);
+  let killedByTimeout = false;
+  const chunks: Buffer[] = [];
+  let bytesOut = 0;
+
+  recordProcess.stdout?.on('data', (buf: Buffer) => {
+    chunks.push(buf);
+    bytesOut += buf.length;
+
+    if (bytesOut > 1000) {
+      currentOperations.add('ActiveAsking');
+      killCurrentTTS();
+    }
+
+    if (getRunningOperations().length > 0 && restartTimeout) {
+      clearRestartTimeout();
+      clearHistoryTimeout();
+    }
   });
 
-  // Monitor file size to detect active recording
-  const monitorVoiceIn = setInterval(async () => {
-    try {
-      const stats = await fs.stat(outPath).catch(() => null);
-      if (stats && stats.size > 1000) {
-        currentOperations.add('ActiveAsking');
-        killCurrentTTS();
-      }
-
-      if (getRunningOperations().length > 0 && restartTimeout) {
-        clearRestartTimeout();
-        clearHistoryTimeout();
-      }
-
-      // Add timeout to record if specified, so we can stop active session after inactivity
-      if (timeoutMs && getRunningOperations().length === 0 && !restartTimeout) {
-        restartTimeout = setTimeout(async () => {
-          restartTimeout = null;
-          killedByTimeout = true;
-          killCurrentRecProcess();
-          console.log(
-            `No voice detected for ${
-              timeoutMs / 1000
-            } seconds, going back to sleep.`,
-          );
-          await backToSleep();
-        }, timeoutMs);
-      }
-    } catch (err) {
-      // Ignore
+  const monitor = setInterval(() => {
+    if (
+      timeoutMs &&
+      bytesOut <= 1000 &&
+      getRunningOperations().length === 0 &&
+      !restartTimeout
+    ) {
+      restartTimeout = setTimeout(async () => {
+        restartTimeout = null;
+        killedByTimeout = true;
+        killCurrentRecProcess();
+        await backToSleep();
+      }, timeoutMs);
     }
   }, 200);
 
@@ -264,26 +268,31 @@ async function recordUntilSilence(
       once(recordProcess, 'exit'),
       once(recordProcess, 'close'),
     ]);
-  } catch (err) {
-    console.error('Recording error:', err);
-    throw err;
   } finally {
-    clearInterval(monitorVoiceIn);
+    clearInterval(monitor);
     clearRestartTimeout();
     currentOperations.delete('ActiveAsking');
-    if (currentRecProcess === recordProcess) {
-      currentRecProcess = null;
-    }
+    if (currentRecProcess === recordProcess) currentRecProcess = null;
   }
 
-  return !killedByTimeout;
+  if (killedByTimeout)
+    return { completedNormally: false, audioBytes: null, filename };
+
+  const audioBytes = Buffer.concat(chunks);
+  return {
+    completedNormally: true,
+    audioBytes: audioBytes.length ? audioBytes : null,
+    filename,
+  };
 }
 
-async function transcribe(wavPath: string): Promise<string> {
-  const bytes = await fs.readFile(wavPath);
+async function transcribeBytes(
+  audioBytes: Buffer,
+  filename: string,
+): Promise<string> {
   const resp = await client.audio.transcriptions.create({
     model: TRANSCRIBE_MODEL,
-    file: await toFile(bytes, 'winterfresh-in.wav'),
+    file: await toFile(audioBytes, filename),
   });
   return (resp.text ?? '').trim();
 }
@@ -488,23 +497,21 @@ async function startChatSession() {
     console.log('\n--- Speak now (auto-stops on silence) ---');
     const wavPath = `/tmp/winterfresh-in-${Date.now()}.wav`;
 
-    const voiceRecCompletedNormally = await recordUntilSilence(
-      wavPath,
-      IDLE_TIMEOUT_MS,
-      SILENCE_DURATION_SEC,
-    );
+    const { completedNormally, audioBytes, filename } =
+      await recordUntilSilenceBytes(IDLE_TIMEOUT_MS, SILENCE_DURATION_SEC);
 
     chimeProcessingStart();
     console.log('Processing voice input...');
     clearRestartTimeout();
 
-    // If killed by timeout, exit - restart() was already called
-    if (!voiceRecCompletedNormally) {
-      fs.unlink(wavPath).catch(() => {});
-      return;
-    }
-
+    if (!completedNormally) return;
     if (!isAppRunning) return;
+
+    // Nothing captured (e.g., very short noise / process ended before output)
+    if (!audioBytes || audioBytes.length === 0) {
+      chimeProcessingStop();
+      continue;
+    }
 
     abortPending = true;
 
@@ -513,7 +520,7 @@ async function startChatSession() {
       abortPending = false;
 
       try {
-        const text = await transcribe(wavPath);
+        const text = await transcribeBytes(audioBytes, filename);
 
         if (!isAppRunning || abortPending) return;
 
