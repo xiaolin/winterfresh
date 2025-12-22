@@ -177,10 +177,26 @@ async function backToSleep() {
   await restart();
 }
 
+// Optional speech-friendly filters (applied before silence detection + transcription).
+// Set to "0" to disable either filter.
+const HIGHPASS_HZ = Number(process.env.HIGHPASS_HZ ?? '80'); // remove rumble
+const LOWPASS_HZ = Number(process.env.LOWPASS_HZ ?? '7500'); // remove hiss/TV sparkle
+
+function soxFilterArgs(): string[] {
+  const args: string[] = [];
+  if (Number.isFinite(HIGHPASS_HZ) && HIGHPASS_HZ > 0)
+    args.push('highpass', String(HIGHPASS_HZ));
+  if (Number.isFinite(LOWPASS_HZ) && LOWPASS_HZ > 0)
+    args.push('lowpass', String(LOWPASS_HZ));
+  return args;
+}
+
 async function recordUntilSilenceBytes(
   timeoutMs?: number,
   silenceDuration: string = SILENCE_DURATION_SEC,
 ): Promise<{ completedNormally: boolean; wavBytes: Buffer | null }> {
+  const filterArgs = soxFilterArgs();
+
   // Returns WAV bytes captured until silence; null if timed out.
   const recordProcess = IS_LINUX
     ? spawn(
@@ -191,6 +207,7 @@ async function recordUntilSilenceBytes(
             `set -o pipefail;`,
             `arecord -q -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
             `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 -`,
+            ...filterArgs,
             `silence 1 0.05 ${SILENCE_THRESHOLD} 1 ${silenceDuration} ${SILENCE_THRESHOLD}`,
           ].join(' '),
         ],
@@ -212,6 +229,13 @@ async function recordUntilSilenceBytes(
           '-', // WAV to stdout
           'gain',
           String(MAC_GAIN_DB),
+
+          // Optional filters on macOS too (SoX "rec" supports these effects)
+          ...(HIGHPASS_HZ > 0
+            ? (['highpass', String(HIGHPASS_HZ)] as const)
+            : []),
+          ...(LOWPASS_HZ > 0 ? (['lowpass', String(LOWPASS_HZ)] as const) : []),
+
           'silence',
           '1',
           '0.05',
