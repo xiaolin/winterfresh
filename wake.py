@@ -67,12 +67,11 @@ def handle_result(result: dict) -> bool:
       volume.set_volume(level)
     return False
 
-  # Check for wake word (exact match from constrained grammar)
-  for wake_phrase in WAKE_WORDS:
-    if wake_phrase in text:
-      print(f"\r✅ WAKE: {text}                    ", flush=True)
-      print("WAKE", flush=True)
-      return True
+  # Check for wake word - EXACT match only (not substring)
+  if text in WAKE_WORDS:
+    print(f"\r✅ WAKE: {text}                    ", flush=True)
+    print("WAKE", flush=True)
+    return True
 
   # If we get here, it's not in our grammar (shouldn't happen with grammar constraint)
   return False
