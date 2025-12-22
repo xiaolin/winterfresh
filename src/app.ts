@@ -212,6 +212,22 @@ function soxFilterArgs(): string[] {
   return args;
 }
 
+// Voice activity detection threshold (RMS amplitude)
+const VAD_RMS_THRESHOLD = 500; // Adjust based on your mic sensitivity
+
+function calculateRMS(buffer: Buffer): number {
+  // Assume 16-bit signed PCM audio
+  let sumSquares = 0;
+  const samples = buffer.length / 2;
+
+  for (let i = 0; i < buffer.length; i += 2) {
+    const sample = buffer.readInt16LE(i);
+    sumSquares += sample * sample;
+  }
+
+  return Math.sqrt(sumSquares / samples);
+}
+
 async function recordUntilSilenceBytes(
   timeoutMs?: number,
   silenceDuration: string = SILENCE_DURATION_SEC,
@@ -299,8 +315,6 @@ async function recordUntilSilenceBytes(
     chunks.push(buf);
   });
 
-  // Monitor raw audio bytes to detect voice activity in real-time
-  // On Linux: use fd 3 (stdio[3]); on macOS: use separate monitorProcess
   const monitorStream = IS_LINUX
     ? (recordProcess.stdio[3] as NodeJS.ReadableStream)
     : monitorProcess?.stdout;
@@ -308,20 +322,26 @@ async function recordUntilSilenceBytes(
   monitorStream?.on('data', (buf: Buffer) => {
     monitorBytes += buf.length;
 
-    // Voice detected once we have meaningful audio data
+    // Only check for voice activity once we have enough data
     if (monitorBytes > 1000) {
-      currentOperations.add('ActiveAsking');
-      killCurrentTTS();
+      const rms = calculateRMS(buf);
 
-      if (restartTimeout) {
-        clearRestartTimeout();
-        clearHistoryTimeout();
+      // Voice detected only if audio amplitude exceeds threshold
+      if (rms > VAD_RMS_THRESHOLD) {
+        currentOperations.add('ActiveAsking');
+        killCurrentTTS();
+
+        if (restartTimeout) {
+          clearRestartTimeout();
+          clearHistoryTimeout();
+        }
       }
     }
   });
 
   // Arm timeout only if no voice detected yet
   const monitor = setInterval(() => {
+    console.log('getRunningOperations()', getRunningOperations());
     if (timeoutMs && getRunningOperations().length === 0 && !restartTimeout) {
       restartTimeout = setTimeout(async () => {
         restartTimeout = null;
