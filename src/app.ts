@@ -533,6 +533,9 @@ async function waitForWakeWord(): Promise<void> {
       process.stdout.write(text);
 
       if (text.includes('WAKE')) {
+        // Kick off warmup immediately, but don't block the user flow.
+        // This overlaps with chime + the user starting to talk.
+        void warmUpApis();
         wakeProcess.kill('SIGTERM');
         resolve();
       }
@@ -750,12 +753,17 @@ async function stop() {
 async function warmUpApis(): Promise<void> {
   try {
     const t0 = performance.now();
-    await client.models.list(); // warms DNS/TLS/HTTP reuse
+    // Warm up chat endpoint with a minimal request
+    await client.chat.completions.create({
+      model: CHAT_MODEL,
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 1,
+    });
     const t1 = performance.now();
-    console.log(`⏱️ warmup(models.list)=${ms(t1 - t0)}`);
+    console.log(`⏱️ warmup(chat)=${ms(t1 - t0)}`);
   } catch (err) {
     // warmup should never block startup
-    console.warn('warmup(models.list) failed:', err);
+    console.warn('warmup(chat) failed:', err);
   }
 }
 
@@ -768,9 +776,6 @@ async function start() {
       await waitForWakeWord();
       if (!isAppRunning) break;
 
-      // Kick off warmup immediately, but don't block the user flow.
-      // This overlaps with chime + the user starting to talk.
-      void warmUpApis();
       recordSuccess(); // Wake word detection succeeded
 
       await startChatSession();
