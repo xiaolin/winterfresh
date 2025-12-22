@@ -519,7 +519,7 @@ async function startChatSession() {
   await chimeWakeDetected();
 
   if (isReturning) {
-    await speakTTS('Welcome back! How can I assist you further?');
+    await speakTTS("Welcome back! What's up?");
   } else {
     await speakTTS("What's up?");
   }
@@ -588,7 +588,7 @@ async function startChatSession() {
         console.log(`⏱️ chat=${ms(t3 - t2)}`);
 
         const replyCmd = normalizeSpokenCommand(reply);
-        if (replyCmd.includes('shutting down')) {
+        if (replyCmd === 'shutting down') {
           console.log('🛑 Winterfresh shutting down per sentiment request.');
           await backToSleep();
           return;
