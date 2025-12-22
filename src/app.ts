@@ -663,6 +663,18 @@ async function stop() {
   console.log('✅ Cleanup complete');
 }
 
+async function warmUpApis(): Promise<void> {
+  try {
+    const t0 = performance.now();
+    await client.models.list(); // warms DNS/TLS/HTTP reuse
+    const t1 = performance.now();
+    console.log(`⏱️ warmup(models.list)=${ms(t1 - t0)}`);
+  } catch (err) {
+    // warmup should never block startup
+    console.warn('warmup(models.list) failed:', err);
+  }
+}
+
 async function start() {
   isAppRunning = true;
   resetErrorCounter();
@@ -672,6 +684,9 @@ async function start() {
       await waitForWakeWord();
       if (!isAppRunning) break;
 
+      // Kick off warmup immediately, but don't block the user flow.
+      // This overlaps with chime + the user starting to talk.
+      void warmUpApis();
       recordSuccess(); // Wake word detection succeeded
 
       await startChatSession();
@@ -686,7 +701,6 @@ async function start() {
           await restart();
           return;
         }
-        await new Promise((resolve) => setTimeout(resolve, 2000));
       }
     }
   }
