@@ -341,7 +341,6 @@ async function recordUntilSilenceBytes(
 
   // Arm timeout only if no voice detected yet
   const monitor = setInterval(() => {
-    console.log('getRunningOperations()', getRunningOperations());
     if (timeoutMs && getRunningOperations().length === 0 && !restartTimeout) {
       restartTimeout = setTimeout(async () => {
         restartTimeout = null;
