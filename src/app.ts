@@ -218,79 +218,71 @@ async function recordUntilSilenceBytes(
 ): Promise<{ completedNormally: boolean; wavBytes: Buffer | null }> {
   const filterArgs = soxFilterArgs();
 
-  // Main recording process: outputs WAV to stdout (buffered by silence filter)
-  const recordProcess = IS_LINUX
-    ? spawn(
-        'bash',
-        [
-          '-lc',
-          [
-            `set -o pipefail;`,
-            `arecord -q -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
-            `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 -`,
-            ...filterArgs,
-            `silence 1 0.05 ${SILENCE_THRESHOLD} 1 ${silenceDuration} ${SILENCE_THRESHOLD}`,
-          ].join(' '),
-        ],
-        { stdio: ['ignore', 'pipe', 'inherit'], detached: true },
-      )
-    : spawn(
-        'rec',
-        [
-          '-G',
-          '-D',
-          '-c',
-          '1',
-          '-r',
-          SAMPLE_RATE,
-          '-b',
-          '16',
-          '-t',
-          'wav',
-          '-',
-          'gain',
-          String(MAC_GAIN_DB),
+  let recordProcess: ReturnType<typeof spawn>;
+  let monitorProcess: ReturnType<typeof spawn> | null = null;
 
-          ...(HIGHPASS_HZ > 0
-            ? (['highpass', String(HIGHPASS_HZ)] as const)
-            : []),
-          ...(LOWPASS_HZ > 0 ? (['lowpass', String(LOWPASS_HZ)] as const) : []),
-
-          'silence',
-          '1',
-          '0.05',
-          SILENCE_THRESHOLD,
-          '1',
-          silenceDuration,
-          SILENCE_THRESHOLD,
-        ],
-        { stdio: ['ignore', 'pipe', 'inherit'], detached: false },
-      );
-
-  // Separate monitor process: raw mic → stdout (streams immediately for voice detection)
-  const monitorProcess = IS_LINUX
-    ? spawn(
-        'arecord',
+  if (IS_LINUX) {
+    // On Linux, use a single arecord and tee its output to both sox and a monitor
+    recordProcess = spawn(
+      'bash',
+      [
+        '-lc',
         [
-          '-q',
-          '-D',
-          LINUX_ARECORD_DEVICE,
-          '-f',
-          'S16_LE',
-          '-c',
-          LINUX_ARECORD_CHANNELS,
-          '-r',
-          LINUX_ARECORD_RATE,
-          '-t',
-          'raw',
-        ],
-        { stdio: ['ignore', 'pipe', 'inherit'] },
-      )
-    : spawn(
-        'rec',
-        ['-q', '-c', '1', '-r', SAMPLE_RATE, '-b', '16', '-t', 'raw', '-'],
-        { stdio: ['ignore', 'pipe', 'inherit'] },
-      );
+          `set -o pipefail;`,
+          `arecord -q -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
+          `| tee >(cat >&3)`, // send copy to fd 3 for monitoring
+          `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 -`,
+          ...filterArgs,
+          `silence 1 0.05 ${SILENCE_THRESHOLD} 1 ${silenceDuration} ${SILENCE_THRESHOLD}`,
+        ].join(' '),
+      ],
+      {
+        stdio: ['ignore', 'pipe', 'inherit', 'pipe'], // fd 3 = monitor output
+        detached: true,
+      },
+    );
+  } else {
+    // macOS: two separate rec processes work fine (CoreAudio allows sharing)
+    recordProcess = spawn(
+      'rec',
+      [
+        '-G',
+        '-D',
+        '-c',
+        '1',
+        '-r',
+        SAMPLE_RATE,
+        '-b',
+        '16',
+        '-t',
+        'wav',
+        '-',
+        'gain',
+        String(MAC_GAIN_DB),
+
+        ...(HIGHPASS_HZ > 0
+          ? (['highpass', String(HIGHPASS_HZ)] as const)
+          : []),
+        ...(LOWPASS_HZ > 0 ? (['lowpass', String(LOWPASS_HZ)] as const) : []),
+
+        'silence',
+        '1',
+        '0.05',
+        SILENCE_THRESHOLD,
+        '1',
+        silenceDuration,
+        SILENCE_THRESHOLD,
+      ],
+      { stdio: ['ignore', 'pipe', 'inherit'], detached: false },
+    );
+
+    // Separate monitor process for macOS
+    monitorProcess = spawn(
+      'rec',
+      ['-q', '-c', '1', '-r', SAMPLE_RATE, '-b', '16', '-t', 'raw', '-'],
+      { stdio: ['ignore', 'pipe', 'inherit'] },
+    );
+  }
 
   currentRecProcess = recordProcess;
 
@@ -308,7 +300,12 @@ async function recordUntilSilenceBytes(
   });
 
   // Monitor raw audio bytes to detect voice activity in real-time
-  monitorProcess.stdout?.on('data', (buf: Buffer) => {
+  // On Linux: use fd 3 (stdio[3]); on macOS: use separate monitorProcess
+  const monitorStream = IS_LINUX
+    ? (recordProcess.stdio[3] as NodeJS.ReadableStream)
+    : monitorProcess?.stdout;
+
+  monitorStream?.on('data', (buf: Buffer) => {
     monitorBytes += buf.length;
 
     // Voice detected once we have meaningful audio data
@@ -335,9 +332,11 @@ async function recordUntilSilenceBytes(
         restartTimeout = null;
         killedByTimeout = true;
         killCurrentRecProcess();
-        try {
-          monitorProcess.kill('SIGTERM');
-        } catch {}
+        if (monitorProcess) {
+          try {
+            monitorProcess.kill('SIGTERM');
+          } catch {}
+        }
         console.log(
           `No voice detected for ${
             timeoutMs / 1000
@@ -357,9 +356,11 @@ async function recordUntilSilenceBytes(
     clearInterval(monitor);
     clearRestartTimeout();
     currentOperations.delete('ActiveAsking');
-    try {
-      monitorProcess.kill('SIGTERM');
-    } catch {}
+    if (monitorProcess) {
+      try {
+        monitorProcess.kill('SIGTERM');
+      } catch {}
+    }
     if (currentRecProcess === recordProcess) currentRecProcess = null;
   }
 
