@@ -218,7 +218,7 @@ async function recordUntilSilenceBytes(
 ): Promise<{ completedNormally: boolean; wavBytes: Buffer | null }> {
   const filterArgs = soxFilterArgs();
 
-  // Returns WAV bytes captured until silence; null if timed out.
+  // Main recording process: outputs WAV to stdout (buffered by silence filter)
   const recordProcess = IS_LINUX
     ? spawn(
         'bash',
@@ -247,11 +247,10 @@ async function recordUntilSilenceBytes(
           '16',
           '-t',
           'wav',
-          '-', // WAV to stdout
+          '-',
           'gain',
           String(MAC_GAIN_DB),
 
-          // Optional filters on macOS too (SoX "rec" supports these effects)
           ...(HIGHPASS_HZ > 0
             ? (['highpass', String(HIGHPASS_HZ)] as const)
             : []),
@@ -268,35 +267,67 @@ async function recordUntilSilenceBytes(
         { stdio: ['ignore', 'pipe', 'inherit'], detached: false },
       );
 
+  // Separate monitor process: raw mic → stdout (streams immediately for voice detection)
+  const monitorProcess = IS_LINUX
+    ? spawn(
+        'arecord',
+        [
+          '-q',
+          '-D',
+          LINUX_ARECORD_DEVICE,
+          '-f',
+          'S16_LE',
+          '-c',
+          LINUX_ARECORD_CHANNELS,
+          '-r',
+          LINUX_ARECORD_RATE,
+          '-t',
+          'raw',
+        ],
+        { stdio: ['ignore', 'pipe', 'inherit'] },
+      )
+    : spawn(
+        'rec',
+        ['-q', '-c', '1', '-r', SAMPLE_RATE, '-b', '16', '-t', 'raw', '-'],
+        { stdio: ['ignore', 'pipe', 'inherit'] },
+      );
+
   currentRecProcess = recordProcess;
 
   let killedByTimeout = false;
+  let monitorBytes = 0;
   const chunks: Buffer[] = [];
-  let bytesOut = 0;
 
   recordProcess.on('error', (err) => {
     console.error('❌ Recording process error:', err);
   });
 
+  // Collect WAV data from main recording process (only arrives after silence detected)
   recordProcess.stdout?.on('data', (buf: Buffer) => {
     chunks.push(buf);
-    bytesOut += buf.length;
+  });
 
-    if (bytesOut > 1000) {
+  // Monitor raw audio bytes to detect voice activity in real-time
+  monitorProcess.stdout?.on('data', (buf: Buffer) => {
+    monitorBytes += buf.length;
+
+    // Voice detected once we have meaningful audio data
+    if (monitorBytes > 1000) {
       currentOperations.add('ActiveAsking');
       killCurrentTTS();
-    }
 
-    if (getRunningOperations().length > 0 && restartTimeout) {
-      clearRestartTimeout();
-      clearHistoryTimeout();
+      if (restartTimeout) {
+        clearRestartTimeout();
+        clearHistoryTimeout();
+      }
     }
   });
 
+  // Arm timeout only if no voice detected yet
   const monitor = setInterval(() => {
     if (
       timeoutMs &&
-      bytesOut <= 1000 &&
+      monitorBytes <= 1000 &&
       getRunningOperations().length === 0 &&
       !restartTimeout
     ) {
@@ -304,6 +335,9 @@ async function recordUntilSilenceBytes(
         restartTimeout = null;
         killedByTimeout = true;
         killCurrentRecProcess();
+        try {
+          monitorProcess.kill('SIGTERM');
+        } catch {}
         console.log(
           `No voice detected for ${
             timeoutMs / 1000
@@ -323,16 +357,20 @@ async function recordUntilSilenceBytes(
     clearInterval(monitor);
     clearRestartTimeout();
     currentOperations.delete('ActiveAsking');
+    try {
+      monitorProcess.kill('SIGTERM');
+    } catch {}
     if (currentRecProcess === recordProcess) currentRecProcess = null;
   }
 
-  if (killedByTimeout) return { completedNormally: false, wavBytes: null };
+  if (killedByTimeout) {
+    return { completedNormally: false, wavBytes: null };
+  }
 
   const wavBytes = Buffer.concat(chunks);
   return {
     completedNormally: true,
-    // store wav in memory for quicker processing
-    wavBytes: wavBytes.length ? wavBytes : null,
+    wavBytes: wavBytes.length > 0 ? wavBytes : null,
   };
 }
 
