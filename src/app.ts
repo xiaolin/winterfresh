@@ -529,9 +529,16 @@ async function startChatSession() {
   while (true && isAppRunning) {
     console.log('\n--- Speak now (auto-stops on silence) ---');
 
+    const tRec0 = performance.now();
     const { completedNormally, wavBytes } = await recordUntilSilenceBytes(
       IDLE_TIMEOUT_MS,
       SILENCE_DURATION_SEC,
+    );
+    const tRec1 = performance.now();
+    console.log(
+      `⏱️ recordUntilSilenceBytes=${ms(tRec1 - tRec0)} (bytes=${
+        wavBytes?.length ?? 0
+      })`,
     );
 
     if (!completedNormally) return;
@@ -595,7 +602,7 @@ async function startChatSession() {
         }
         if (!isAppRunning || abortPending) return;
 
-        console.log('Winterfresh:', reply);
+        console.log('Winterfresh Reply:', reply);
 
         messages.push({ role: 'assistant', content: reply });
         trimHistory(messages);
