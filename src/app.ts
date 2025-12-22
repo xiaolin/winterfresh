@@ -81,7 +81,7 @@ const currentOperations = new Set<Operation>();
 const SILENCE_THRESHOLD = '2.0';
 // How long silence must persist to stop recording
 // '1.0' means recording stops after 1.0 seconds of continuous silence
-const SILENCE_DURATION_SEC = '1.0';
+const SILENCE_DURATION_SEC = '1.0'; // leave at 1 otherwise too eager to cut off
 const INPUT_VOLUME = 2; // Linux only (linear factor)
 const MAC_GAIN_DB = 6; // ~20*log10(2) = +6.02 dB
 
