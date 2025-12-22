@@ -1,11 +1,14 @@
 # Extra grammar phrases that should NEVER trigger actions.
 # Purpose: reduce forced-decoding into wake/volume by giving the decoder other sinks.
 # NOTE: Only include words/phrases that exist in Vosk's vocabulary.
+
+
 FILLER_PHRASES = [
   # Common words / phrases
   "hello",
   "hi",
   "hey",
+  "ok",
   "okay",
   "yes",
   "no",
@@ -50,6 +53,69 @@ FILLER_PHRASES = [
   "might",
   "must",
   "shall",
+
+  # Ultra-common connectors / glue words
+  "and",
+  "or",
+  "but",
+  "so",
+  "because",
+  "if",
+  "then",
+  "than",
+  "not",
+  "just",
+  "also",
+  "too",
+  "very",
+  "really",
+  "like",
+  "well",
+  "right",
+
+  # Common prepositions
+  "to",
+  "of",
+  "in",
+  "on",
+  "at",
+  "for",
+  "from",
+  "with",
+  "without",
+  "about",
+  "into",
+  "over",
+  "under",
+  "before",
+  "after",
+  "around",
+  "through",
+
+  # Common pronouns / determiners
+  "i",
+  "me",
+  "my",
+  "mine",
+  "you",
+  "your",
+  "yours",
+  "we",
+  "us",
+  "our",
+  "ours",
+  "they",
+  "them",
+  "their",
+  "theirs",
+  "he",
+  "him",
+  "his",
+  "she",
+  "her",
+  "hers",
+
+  # Verbs
   "go",
   "come",
   "get",
@@ -134,7 +200,7 @@ FILLER_PHRASES = [
   "kill",
   "remain",
 
-  # Sounds / interjections (verified in Vosk vocab)
+  # Sounds / interjections
   "oh",
   "ah",
   "uh",
@@ -150,9 +216,7 @@ FILLER_PHRASES = [
   # Similar-sounding to "winter fresh" (false positive sinks)
   "winter",
   "winner",
-  "when",
   "went",
-  "into",
   "enter",
   "inner",
   "center",
@@ -182,7 +246,18 @@ FILLER_PHRASES = [
   "pest",
   "quest",
   "chest",
-  "just",
+
+  # Near-misses people/TV often produce
+  "wintertime",
+  "wintergreen",
+  "refresh",
+  "refreshed",
+  "refresher",
+  "interest",
+  "interests",
+  "interface",
+  "internet",
+  "introduce",
 
   # Random nouns (sinks for background chatter)
   "pineapple",
@@ -297,8 +372,6 @@ FILLER_PHRASES = [
   "definitely",
   "absolutely",
   "actually",
-  "really",
-  "very",
   "much",
   "more",
   "most",
@@ -328,7 +401,6 @@ FILLER_PHRASES = [
   "short",
   "high",
   "low",
-  "right",
   "left",
   "early",
   "late",
