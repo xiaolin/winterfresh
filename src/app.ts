@@ -32,7 +32,7 @@ const TRANSCRIBE_MODEL =
   process.env.TRANSCRIBE_MODEL ?? 'gpt-4o-mini-transcribe';
 const TTS_MODEL = process.env.TTS_MODEL ?? 'gpt-4o-mini-tts';
 const DEFAULT_RULES = [
-  'Default to one or two sentences if possible, unless more detail is requested.',
+  'Default to one sentences if possible, unless more detail is requested.',
   'Be direct and honest. Never sugarcoat, never be rude.',
   'Match depth to the question: If the user asks "why/how" or asks for context, teach briefly. Otherwise answer directly; add at most one short extra sentence if it improves understanding.',
   'If a question is ambiguous, ask one clarifying question and wait.',
