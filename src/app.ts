@@ -41,6 +41,26 @@ const DEFAULT_RULES = [
   'I am transcribing my speech, so you hear an audio transcription, not perfect text.',
 ].join('\n- ');
 const ASSISTANT_RULES = process.env.ASSISTANT_RULES ?? DEFAULT_RULES;
+const STOP_INTENTS = [
+  'stop',
+  'shut up',
+  'be quiet',
+  'quiet',
+  'enough',
+  "that's enough",
+  'thats enough',
+  'i got it',
+  'got it',
+  'never mind',
+  'nevermind',
+  'cancel',
+  'go away',
+  'go to sleep',
+  'goodbye',
+  'bye',
+  'winter fresh stop',
+  'winterfresh stop',
+];
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
 const system: Msg = {
@@ -49,6 +69,9 @@ const system: Msg = {
     You are Winterfresh, a helpful assistant voice assistant that prioritizes answering in one sentence
     
     Rules:
+    - VERY IMPORTANT: If you hear these words ${STOP_INTENTS.join(
+      ', ',
+    )} used in a context where I don't want more info, respond exactly with "shutting down" and stop further responses.
     - ${ASSISTANT_RULES},
   `,
 };
@@ -477,27 +500,6 @@ async function waitForWakeWord(): Promise<void> {
   });
 }
 
-const STOP_INTENTS = [
-  'stop',
-  'shut up',
-  'be quiet',
-  'quiet',
-  'enough',
-  "that's enough",
-  'thats enough',
-  'i got it',
-  'got it',
-  'never mind',
-  'nevermind',
-  'cancel',
-  'go away',
-  'go to sleep',
-  'goodbye',
-  'bye',
-  'winter fresh stop',
-  'winterfresh stop',
-];
-
 const STOP_INTENTS_NORMALIZED = new Set(
   STOP_INTENTS.map(normalizeSpokenCommand),
 );
@@ -585,13 +587,12 @@ async function startChatSession() {
         const t3 = performance.now();
         console.log(`⏱️ chat=${ms(t3 - t2)}`);
 
-        // remove sentiment shutdown handling for now
-        // const replyCmd = normalizeSpokenCommand(reply);
-        // if (replyCmd === 'shutting down') {
-        //   console.log('🛑 Winterfresh shutting down per sentiment request.');
-        //   await backToSleep();
-        //   return;
-        // }
+        const replyCmd = normalizeSpokenCommand(reply);
+        if (replyCmd === 'shutting down') {
+          console.log('🛑 Winterfresh shutting down per sentiment request.');
+          await backToSleep();
+          return;
+        }
         if (!isAppRunning || abortPending) return;
 
         console.log('Winterfresh:', reply);
