@@ -510,12 +510,12 @@ async function startChatSession() {
       SILENCE_DURATION_SEC,
     );
 
+    if (!completedNormally) return;
+    if (!isAppRunning) return;
+
     chimeProcessingStart();
     console.log('Processing voice input...');
     clearRestartTimeout();
-
-    if (!completedNormally) return;
-    if (!isAppRunning) return;
 
     // Nothing captured (e.g., very short noise / process ended before output)
     if (!wavBytes || wavBytes.length === 0) {
@@ -565,7 +565,7 @@ async function startChatSession() {
 
         const replyCmd = normalizeSpokenCommand(reply);
         if (replyCmd.includes('shutting down')) {
-          console.log('🛑 Winterfresh shutting down per user request.');
+          console.log('🛑 Winterfresh shutting down per sentiment request.');
           await backToSleep();
           return;
         }
