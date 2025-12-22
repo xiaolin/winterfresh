@@ -12,11 +12,6 @@ import filler_words
 WAKE_WORDS = [
   'winter fresh',
   'hey winter fresh',
-  'hey when to fresh',
-  'hey when a fresh',
-  'hey when the fresh',
-  'hey winner fresh',
-  'hey winter fest',
 ]
 
 MAX_WAKE_WORDS = int(os.getenv("MAX_WAKE_WORDS", "4"))
