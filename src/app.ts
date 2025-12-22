@@ -476,9 +476,13 @@ const STOP_INTENTS = [
   'winterfresh stop',
 ];
 
+const STOP_INTENTS_NORMALIZED = new Set(
+  STOP_INTENTS.map(normalizeSpokenCommand),
+);
+
 function isStopIntent(text: string): boolean {
   const cmd = normalizeSpokenCommand(text);
-  return STOP_INTENTS.some((phrase) => cmd.includes(phrase));
+  return STOP_INTENTS_NORMALIZED.has(cmd);
 }
 
 async function startChatSession() {
