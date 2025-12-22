@@ -25,7 +25,7 @@ function getCacheKey(text: string, voice: string): string {
     .update(`${voice}:${normalized}`)
     .digest('hex')
     .slice(0, 16);
-  return `${hash}.mp3`;
+  return `${hash}.wav`;
 }
 
 /**

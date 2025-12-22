@@ -374,7 +374,7 @@ async function speakTTS(text: string) {
   if (cachedPath) {
     console.log('⏱️ tts(cache)=hit');
     const speakProcess = spawn('play', ['-q', cachedPath], {
-      stdio: ['pipe', 'inherit', 'inherit'],
+      stdio: ['ignore', 'inherit', 'inherit'],
     });
     currentTtsProcess = speakProcess;
 
@@ -394,13 +394,13 @@ async function speakTTS(text: string) {
     model: TTS_MODEL,
     voice: TTS_VOICE,
     input: text,
-    response_format: 'mp3',
+    response_format: 'wav',
   });
   const tResp = performance.now();
   console.log(`⏱️ tts(api)=${ms(tResp - tReq)}`);
 
   const chunks: Buffer[] = [];
-  const speakProcess = spawn('play', ['-q', '-t', 'mp3', '-'], {
+  const speakProcess = spawn('play', ['-q', '-t', 'wav', '-'], {
     stdio: ['pipe', 'inherit', 'inherit'],
   });
   currentTtsProcess = speakProcess;
