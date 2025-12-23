@@ -28,47 +28,39 @@ export async function chimeWakeDetected() {
   });
 }
 
+// comment out for now.
 export function chimeProcessingStart() {
-  chimeProcessingStop();
-
-  const soundPath = path.join(__dirname, '../sounds', 'processing.wav');
-  processingLoopRunning = true;
-
-  const playNext = () => {
-    if (!processingLoopRunning) return;
-
-    const p = spawnPlayer(soundPath);
-    processingChimeProcess = p;
-
-    p.on('close', () => {
-      processingChimeProcess = null;
-      if (!processingLoopRunning) return;
-
-      // small gap; tune if you want
-      processingLoopTimer = setTimeout(playNext, 150);
-    });
-
-    p.on('error', () => {
-      processingChimeProcess = null;
-      if (!processingLoopRunning) return;
-      processingLoopTimer = setTimeout(playNext, 500);
-    });
-  };
-
-  playNext();
+  // chimeProcessingStop();
+  // const soundPath = path.join(__dirname, '../sounds', 'processing.wav');
+  // processingLoopRunning = true;
+  // const playNext = () => {
+  //   if (!processingLoopRunning) return;
+  //   const p = spawnPlayer(soundPath);
+  //   processingChimeProcess = p;
+  //   p.on('close', () => {
+  //     processingChimeProcess = null;
+  //     if (!processingLoopRunning) return;
+  //     // small gap; tune if you want
+  //     processingLoopTimer = setTimeout(playNext, 150);
+  //   });
+  //   p.on('error', () => {
+  //     processingChimeProcess = null;
+  //     if (!processingLoopRunning) return;
+  //     processingLoopTimer = setTimeout(playNext, 500);
+  //   });
+  // };
+  // playNext();
 }
 
 export function chimeProcessingStop() {
-  processingLoopRunning = false;
-
-  if (processingLoopTimer) {
-    clearTimeout(processingLoopTimer);
-    processingLoopTimer = null;
-  }
-
-  if (processingChimeProcess) {
-    // SIGTERM is usually enough; SIGKILL can cut off ALSA weirdly
-    processingChimeProcess.kill('SIGTERM');
-    processingChimeProcess = null;
-  }
+  // processingLoopRunning = false;
+  // if (processingLoopTimer) {
+  //   clearTimeout(processingLoopTimer);
+  //   processingLoopTimer = null;
+  // }
+  // if (processingChimeProcess) {
+  //   // SIGTERM is usually enough; SIGKILL can cut off ALSA weirdly
+  //   processingChimeProcess.kill('SIGTERM');
+  //   processingChimeProcess = null;
+  // }
 }
