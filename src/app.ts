@@ -757,7 +757,7 @@ async function warmUpApis(): Promise<void> {
     await client.chat.completions.create({
       model: CHAT_MODEL,
       messages: [{ role: 'user', content: 'hi' }],
-      max_completion_tokens: 1,
+      max_completion_tokens: 5,
     });
     const t1 = performance.now();
     console.log(`⏱️ warmup(chat)=${ms(t1 - t0)}`);
