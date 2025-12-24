@@ -239,7 +239,7 @@ async function recordUntilSilenceBytes(
         [
           `set -o pipefail;`,
           `arecord -q -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
-          `| tee >(cat >&3)`, // send copy to fd 3 for monitoring
+          `| tee >(cat >&3)`, // send copy to fd 3 for monitoring voice activity
           `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 -`,
           ...filterArgs,
           `silence 1 0.05 ${SILENCE_THRESHOLD} 1 ${silenceDuration} ${SILENCE_THRESHOLD}`,
@@ -308,6 +308,8 @@ async function recordUntilSilenceBytes(
     chunks.push(buf);
   });
 
+  // Monitor raw audio bytes to detect voice activity in real-time
+  // On Linux: use fd 3 (tee'd from arecord); on macOS: use separate rec process
   const monitorStream = IS_LINUX
     ? (recordProcess.stdio[3] as NodeJS.ReadableStream)
     : monitorProcess?.stdout;
