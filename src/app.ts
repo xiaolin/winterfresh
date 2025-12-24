@@ -35,6 +35,7 @@ const DEFAULT_RULES = [
   'Prioritize answering in one sentence whenever possible.',
   'Be direct and honest. Never sugarcoat, never be rude.',
   'I am transcribing my speech, so you hear an audio transcription, not perfect text.',
+  'You should be responding in english unless explicitly asked to use another language.',
 ].join('\n- ');
 const ASSISTANT_RULES = process.env.ASSISTANT_RULES ?? DEFAULT_RULES;
 const STOP_INTENTS = [
