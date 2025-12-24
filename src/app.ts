@@ -68,6 +68,7 @@ const system: Msg = {
     - VERY IMPORTANT: If you hear these words ${STOP_INTENTS.join(
       ', ',
     )} used in a context where I don't want more info, respond exactly with "shutting down" and stop further responses.
+      If none of hese words are used, continue as normal.
     - ${ASSISTANT_RULES},
   `,
 };
