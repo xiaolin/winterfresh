@@ -643,12 +643,13 @@ async function startChatSession() {
         const t3 = performance.now();
         console.log(`⏱️ chat=${ms(t3 - t2)}`);
 
-        const replyCmd = normalizeSpokenCommand(reply);
-        if (replyCmd === 'shutting down') {
-          console.log('🛑 Winterfresh shutting down per sentiment request.');
-          await backToSleep();
-          return;
-        }
+        // sentiment analysis for shutdown (disabled for now, unreliable)
+        // const replyCmd = normalizeSpokenCommand(reply);
+        // if (replyCmd === 'shutting down') {
+        //   console.log('🛑 Winterfresh shutting down per sentiment request.');
+        //   await backToSleep();
+        //   return;
+        // }
         if (!isAppRunning || abortPending) return;
 
         console.log('Winterfresh Reply:', reply);
