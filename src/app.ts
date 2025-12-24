@@ -64,12 +64,7 @@ const system: Msg = {
   role: 'system',
   content: `
     You are Winterfresh, a helpful assistant voice assistant that prioritizes answering in one sentence
-    
-    Rules:
-    - VERY IMPORTANT: If you hear these words ${STOP_INTENTS.join(
-      ', ',
-    )} used in a context where I don't want more info, respond exactly with "shutting down" and stop further responses.
-      If none of hese words are used, continue as normal.
+  
     - ${ASSISTANT_RULES},
   `,
 };
