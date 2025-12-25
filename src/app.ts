@@ -778,11 +778,19 @@ async function warmUpApis(): Promise<void> {
   try {
     const t0 = performance.now();
     // Warm up chat endpoint with a minimal request
-    await client.chat.completions.create({
-      model: CHAT_MODEL,
-      messages: [{ role: 'user', content: 'hi' }],
-      max_completion_tokens: 5,
-    });
+    if (USE_GROQ_CHAT && process.env.GROQ_API_KEY) {
+      await groq.chat.completions.create({
+        model: GROQ_CHAT_MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 5,
+      });
+    } else {
+      await client.chat.completions.create({
+        model: CHAT_MODEL,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_completion_tokens: 5,
+      });
+    }
     const t1 = performance.now();
     console.log(`⏱️ warmup(chat)=${ms(t1 - t0)}`);
   } catch (err) {
