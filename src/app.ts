@@ -68,7 +68,10 @@ type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
 const system: Msg = {
   role: 'system',
   content: `
-    You are Winterfresh, a helpful assistant voice assistant that prioritizes answering in one sentence
+    You are Winterfresh, a helpful assistant voice assistant that prioritizes answering in one sentence.
+
+    Rules:
+    - Most Important: If I respond with very few words that includes ${STOP_INTENTS}, you must respond with exactly "shutting down" and end the session.
   
     - ${ASSISTANT_RULES},
   `,
@@ -670,13 +673,13 @@ async function startChatSession() {
         const t3 = performance.now();
         console.log(`⏱️ chat=${ms(t3 - t2)}`);
 
-        // sentiment analysis for shutdown (disabled for now, unreliable)
-        // const replyCmd = normalizeSpokenCommand(reply);
-        // if (replyCmd === 'shutting down') {
-        //   console.log('🛑 Winterfresh shutting down per sentiment request.');
-        //   await backToSleep();
-        //   return;
-        // }
+        // shut down intent detected by ai
+        const replyCmd = normalizeSpokenCommand(reply);
+        if (replyCmd === 'shutting down') {
+          console.log('🛑 Winterfresh shutting down per sentiment request.');
+          await backToSleep();
+          return;
+        }
         if (!isAppRunning || abortPending) return;
 
         console.log('Winterfresh Reply:', reply);
