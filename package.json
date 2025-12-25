@@ -7,7 +7,7 @@
     "dev": "tsx src/app.ts",
     "build": "tsc",
     "start": "node dist/app.js",
-    "deploy": "git pull && npm run build && pm2 reload winterfresh"
+    "deploy": "git pull && npm install && npm run build && pm2 reload winterfresh"
   },
   "keywords": [],
   "dependencies": {
