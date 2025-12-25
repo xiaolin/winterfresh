@@ -1,9 +1,9 @@
 import 'dotenv/config';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import OpenAI, { toFile } from 'openai';
+import Groq from 'groq-sdk';
 
 import {
   chimeWakeDetected,
@@ -23,6 +23,7 @@ import { getCachedAudio, cacheAudio, CACHED_PHRASES } from './tts-cache.js';
 
 const IS_LINUX = process.platform === 'linux';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '16000';
 const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'plughw:2,0';
 const LINUX_ARECORD_RATE = process.env.ARECORD_RATE ?? '16000';
@@ -30,7 +31,7 @@ const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '1';
 const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-4o-mini';
 const TRANSCRIBE_MODEL =
   process.env.TRANSCRIBE_MODEL ?? 'gpt-4o-mini-transcribe';
-const TTS_MODEL = process.env.TTS_MODEL ?? 'gpt-4o-mini-tts';
+const TTS_MODEL = process.env.TTS_MODEL ?? 'tts-1';
 const DEFAULT_RULES = [
   'Prioritize answering in one sentence whenever possible.',
   'Be direct and honest. Never sugarcoat, never be rude.',
@@ -385,6 +386,16 @@ async function recordUntilSilenceBytes(
 }
 
 async function transcribeBytes(wavBytes: Buffer): Promise<string> {
+  // Groq's Whisper is significantly faster due to LPU hardware
+  if (process.env.GROQ_API_KEY) {
+    const resp = await groq.audio.transcriptions.create({
+      model: 'whisper-large-v3-turbo',
+      file: await toFile(wavBytes, 'winterfresh-in.wav'),
+    });
+    return (resp.text ?? '').trim();
+  }
+
+  // Fallback to OpenAI
   const resp = await client.audio.transcriptions.create({
     model: TRANSCRIBE_MODEL,
     file: await toFile(wavBytes, 'winterfresh-in.wav'),
