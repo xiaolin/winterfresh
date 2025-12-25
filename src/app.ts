@@ -29,6 +29,9 @@ const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'plughw:2,0';
 const LINUX_ARECORD_RATE = process.env.ARECORD_RATE ?? '16000';
 const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '1';
 const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-4o-mini';
+// Use Groq chat API if you want 4-8x faster chat response times
+const USE_GROQ_CHAT = process.env.USE_GROQ_CHAT === 'true';
+const GROQ_CHAT_MODEL = process.env.GROQ_CHAT_MODEL ?? 'openai/gpt-oss-20b';
 const TRANSCRIBE_MODEL =
   process.env.TRANSCRIBE_MODEL ?? 'gpt-4o-mini-transcribe';
 const TTS_MODEL = process.env.TTS_MODEL ?? 'tts-1';
@@ -404,6 +407,16 @@ async function transcribeBytes(wavBytes: Buffer): Promise<string> {
 }
 
 async function chat(messages: Msg[]): Promise<string> {
+  // Groq is significantly faster for chat
+  if (USE_GROQ_CHAT && process.env.GROQ_API_KEY) {
+    const resp = await groq.chat.completions.create({
+      model: GROQ_CHAT_MODEL,
+      messages,
+    });
+    return resp.choices[0]?.message?.content?.trim() ?? '';
+  }
+
+  // Fallback to OpenAI
   const resp = await client.chat.completions.create({
     model: CHAT_MODEL,
     messages,
