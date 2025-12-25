@@ -31,7 +31,8 @@ const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '1';
 const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-4o-mini';
 // Use Groq chat API if you want 4-8x faster chat response times
 const USE_GROQ_CHAT = process.env.USE_GROQ_CHAT === 'true';
-const GROQ_CHAT_MODEL = process.env.GROQ_CHAT_MODEL ?? 'openai/gpt-oss-20b';
+const GROQ_CHAT_MODEL =
+  process.env.GROQ_CHAT_MODEL ?? 'llama-3.3-70b-versatile';
 const TRANSCRIBE_MODEL =
   process.env.TRANSCRIBE_MODEL ?? 'gpt-4o-mini-transcribe';
 const TTS_MODEL = process.env.TTS_MODEL ?? 'tts-1';
