@@ -666,9 +666,6 @@ async function startChatSession() {
     lastInteractionTime > 0 ? Date.now() - lastInteractionTime : 0;
   const isReturning = messages.length > 1 && historyAge < HISTORY_TIMEOUT_MS;
 
-  // Start background shutdown listener
-  startShutdownListener();
-
   await chimeWakeDetected();
 
   if (isReturning) {
@@ -676,6 +673,9 @@ async function startChatSession() {
   } else {
     await speakTTS("What's up?");
   }
+
+  // Start background shutdown listener
+  startShutdownListener();
 
   let abortPending = false;
 
