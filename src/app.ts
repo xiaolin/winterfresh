@@ -122,16 +122,13 @@ function startShutdownListener(): void {
     const text = data.toString().trim();
     if (text === 'SHUTDOWN') {
       console.log('\n🛑 Shutdown phrase detected by background listener');
-
       killCurrentTTS();
-      // Allow TTS kill to complete before speaking goodbye
       await new Promise((resolve) => setTimeout(resolve, 200));
       await backToSleep();
     }
   });
 
   shutdownListenerProcess.stderr?.on('data', (data: Buffer) => {
-    // Only log errors, not routine messages
     const msg = data.toString();
     if (msg.includes('ERROR') || msg.includes('error')) {
       console.error('Shutdown listener:', msg);
