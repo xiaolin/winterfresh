@@ -84,6 +84,7 @@ const TTS_VOICE = 'alloy';
 
 let currentTtsProcess: ReturnType<typeof spawn> | null = null;
 let currentRecProcess: ReturnType<typeof spawn> | null = null;
+let shutdownListenerProcess: ReturnType<typeof spawn> | null = null;
 let isAppRunning = false;
 let restartTimeout: NodeJS.Timeout | null = null;
 let historyTimeout: NodeJS.Timeout | null = null;
@@ -106,6 +107,61 @@ const SILENCE_THRESHOLD = '2.0';
 const SILENCE_DURATION_SEC = '1.0'; // leave at 1 otherwise too eager to cut off
 const INPUT_VOLUME = 2; // Linux only (linear factor)
 const MAC_GAIN_DB = 6; // ~20*log10(2) = +6.02 dB
+
+// shutdown listener functions
+
+function startShutdownListener(): void {
+  const pythonPath = path.join(process.cwd(), '.venv', 'bin', 'python');
+  const listenerPath = path.join(process.cwd(), 'shutdown_listener.py');
+
+  shutdownListenerProcess = spawn(pythonPath, ['-u', listenerPath], {
+    stdio: ['inherit', 'pipe', 'pipe'],
+  });
+
+  shutdownListenerProcess.stdout?.on('data', async (data: Buffer) => {
+    const text = data.toString().trim();
+    if (text === 'SHUTDOWN') {
+      console.log('\n🛑 Shutdown phrase detected by background listener');
+
+      killCurrentTTS();
+      // Allow TTS kill to complete before speaking goodbye
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await backToSleep();
+    }
+  });
+
+  shutdownListenerProcess.stderr?.on('data', (data: Buffer) => {
+    // Only log errors, not routine messages
+    const msg = data.toString();
+    if (msg.includes('ERROR') || msg.includes('error')) {
+      console.error('Shutdown listener:', msg);
+    }
+  });
+
+  shutdownListenerProcess.on('error', (err) => {
+    console.error('Shutdown listener error:', err);
+  });
+
+  shutdownListenerProcess.on('close', (code) => {
+    if (code !== 0 && code !== null && isAppRunning) {
+      console.warn(`Shutdown listener exited with code ${code}`);
+    }
+    shutdownListenerProcess = null;
+  });
+
+  console.log('🎧 Shutdown listener started');
+}
+
+function stopShutdownListener(): void {
+  if (shutdownListenerProcess) {
+    try {
+      shutdownListenerProcess.kill('SIGTERM');
+    } catch {}
+    shutdownListenerProcess = null;
+    console.log('🎧 Shutdown listener stopped');
+  }
+}
+// end shutdown listener functions
 
 function ms(n: number) {
   return `${Math.round(n)}ms`;
@@ -187,12 +243,20 @@ function restartHistoryTimeout() {
 
 async function backToSleep() {
   isAppRunning = false; // stop app loop and let restart handle it
-  await speakTTS('Alright, going back to sleep.');
-  await waitForOperationsCompleteAsync();
-  clearSpeakingOperation();
-  clearRestartTimeout();
-  clearSpeakingOperation();
+
+  // Stop the shutdown listener first
+  stopShutdownListener();
+
+  // Kill any current TTS before speaking goodbye
   killCurrentTTS();
+
+  await speakTTS('Alright, going back to sleep.');
+  // Wait for any remaining operations
+  await waitForOperationsCompleteAsync();
+
+  // Final cleanup
+  clearRestartTimeout();
+  clearHistoryTimeout();
 
   // Small buffer to ensure audio fully plays out
   await new Promise((resolve) => setTimeout(resolve, 500));
@@ -595,6 +659,9 @@ async function startChatSession() {
     lastInteractionTime > 0 ? Date.now() - lastInteractionTime : 0;
   const isReturning = messages.length > 1 && historyAge < HISTORY_TIMEOUT_MS;
 
+  // Start background shutdown listener
+  startShutdownListener();
+
   await chimeWakeDetected();
 
   if (isReturning) {
@@ -744,6 +811,9 @@ function killCurrentRecProcess() {
 async function stop() {
   console.log('\n🛑 Stopping Winterfresh...');
   isAppRunning = false;
+
+  // Stop shutdown listener
+  stopShutdownListener();
 
   // Wait for current TTS to finish naturally (up to 5s) before killing
   if (currentTtsProcess) {
