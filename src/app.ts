@@ -675,7 +675,7 @@ async function startChatSession() {
   }
 
   // Start background shutdown listener
-  startShutdownListener();
+  // startShutdownListener();
 
   let abortPending = false;
 
