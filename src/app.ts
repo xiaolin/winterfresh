@@ -456,7 +456,17 @@ async function recordUntilSilenceBytes(
   };
 }
 
+const MIN_AUDIO_BYTES = 3500;
+
 async function transcribeBytes(wavBytes: Buffer): Promise<string> {
+  // Guard against audio that's too short
+  if (wavBytes.length < MIN_AUDIO_BYTES) {
+    console.log(
+      `⚠️ Audio too short (${wavBytes.length} bytes), skipping transcription`,
+    );
+    return '';
+  }
+
   // Groq's Whisper is significantly faster due to LPU hardware
   if (process.env.GROQ_API_KEY) {
     const resp = await groq.audio.transcriptions.create({
