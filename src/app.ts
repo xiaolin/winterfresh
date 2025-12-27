@@ -25,7 +25,7 @@ const IS_LINUX = process.platform === 'linux';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '16000';
-const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'mic_share';
+const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'plughw:2,0';
 const LINUX_ARECORD_RATE = process.env.ARECORD_RATE ?? '16000';
 const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '2';
 const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-4o-mini';
