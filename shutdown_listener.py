@@ -24,7 +24,7 @@ SR = int(os.getenv("WAKE_SR", "16000"))
 BLOCK = int(os.getenv("WAKE_BLOCK", "4000"))
 
 LINUX_CHANNELS = int(os.getenv("WAKE_CHANNELS", "2"))
-LINUX_DEVICE = os.getenv("WAKE_ARECORD_DEVICE", "plughw:2,0")
+LINUX_DEVICE = os.getenv("WAKE_ARECORD_DEVICE", "mic_share")
 
 IS_LINUX = sys.platform.startswith("linux")
 
