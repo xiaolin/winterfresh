@@ -619,18 +619,34 @@ async function waitForWakeWord(): Promise<void> {
   // Use -u flag for unbuffered Python output
   const wakeProcess = spawn(pythonPath, ['-u', wakePath], {
     stdio: ['inherit', 'pipe', 'pipe'],
+    detached: IS_LINUX, // Allow killing process group on Linux
   });
 
   return new Promise((resolve, reject) => {
+    let resolved = false;
+
+    const cleanup = () => {
+      if (wakeProcess.pid !== undefined) {
+        try {
+          if (IS_LINUX) {
+            // Kill entire process group (python + arecord)
+            process.kill(-wakeProcess.pid, 'SIGKILL');
+          } else {
+            wakeProcess.kill('SIGKILL');
+          }
+        } catch {}
+      }
+    };
+
     wakeProcess.stdout?.on('data', (data: Buffer) => {
       const text = data.toString();
       process.stdout.write(text);
 
-      if (text.includes('WAKE')) {
-        // Kick off warmup immediately, but don't block the user flow.
-        // This overlaps with chime + the user starting to talk.
+      if (text.includes('WAKE') && !resolved) {
+        resolved = true;
+        // Kick off warmup immediately
         void warmUpApis();
-        wakeProcess.kill('SIGTERM');
+        cleanup();
         resolve();
       }
     });
@@ -639,12 +655,23 @@ async function waitForWakeWord(): Promise<void> {
       process.stderr.write(data);
     });
 
-    wakeProcess.on('error', reject);
+    wakeProcess.on('error', (err) => {
+      if (!resolved) {
+        resolved = true;
+        reject(err);
+      }
+    });
+
     wakeProcess.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-      } else if (code !== null && isAppRunning) {
-        reject(new Error(`Wake process exited with code ${code}`));
+      if (!resolved) {
+        resolved = true;
+        if (code === 0) {
+          resolve();
+        } else if (code !== null && isAppRunning) {
+          reject(new Error(`Wake process exited with code ${code}`));
+        } else {
+          resolve();
+        }
       }
     });
   });
