@@ -68,7 +68,7 @@ type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
 const system: Msg = {
   role: 'system',
   content: `
-    You are Winterfresh, a helpful assistant voice assistant that prioritizes answering in one sentence.
+    You are Winterfresh, a helpful voice assistant that prioritizes answering in one sentence.
     - ${ASSISTANT_RULES},
   `,
 };
