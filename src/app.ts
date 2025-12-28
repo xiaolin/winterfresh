@@ -69,10 +69,6 @@ const system: Msg = {
   role: 'system',
   content: `
     You are Winterfresh, a helpful assistant voice assistant that prioritizes answering in one sentence.
-
-    Rules:
-    - Most Important: If I respond with very few words that includes ${STOP_INTENTS}, you must respond with exactly "shutting down" and end the session.
-  
     - ${ASSISTANT_RULES},
   `,
 };

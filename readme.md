@@ -121,6 +121,8 @@ Environment variables in `.env`:
 | `TTS_MODEL`             | `gpt-4o-mini-tts`        | OpenAI text-to-speech model            |
 | `WINTERFRESH_MAX_TURNS` | `20`                     | Max conversation turns before trimming |
 | `SAMPLE_RATE`           | `24000`                  | Audio sample rate for recording        |
+| `ARECORD_DEVICE`        | `mic_share`              | ALSA device for recording (Linux)      |
+| `ARECORD_CHANNELS`      | `2`                      | Audio channels for recording (Linux)   |
 
 Example `.env` file:
 
@@ -130,22 +132,89 @@ CHAT_MODEL=gpt-4o-mini
 TRANSCRIBE_MODEL=gpt-4o-mini-transcribe
 TTS_MODEL=gpt-4o-mini-tts
 WINTERFRESH_MAX_TURNS=20
+ARECORD_DEVICE=mic_share
+ARECORD_CHANNELS=2
 ```
 
 ### 6. Audio Device Setup (Raspberry Pi)
+
+#### 6.1 Check USB Audio Device
 
 ```bash
 # Plug in your USB speakerphone
 
 # Check if detected
+cat /proc/asound/cards
+# Should show your USB device (e.g., card 2: EMEET OfficeCore M0 Plus)
+
 arecord -l  # List capture devices
 aplay -l    # List playback devices
+```
 
-# Test recording (speak into mic, then Ctrl+C)
-rec -c 1 -r 16000 /tmp/test.wav trim 0 3
+#### 6.2 Configure ALSA for Shared Microphone Access
+
+Create `~/.asoundrc` to allow multiple processes to share the microphone:
+
+```bash
+cat > ~/.asoundrc << 'EOF'
+pcm.mic_share {
+    type dsnoop
+    ipc_key 12345
+    slave {
+        pcm "hw:2,0"
+        rate 16000
+        channels 2
+    }
+}
+EOF
+```
+
+**Note:** Replace `hw:2,0` with your actual card number from `arecord -l` if different.
+
+#### 6.3 Configure PulseAudio
+
+```bash
+# Check PulseAudio is running
+systemctl --user status pulseaudio
+
+# If not running, start it
+systemctl --user start pulseaudio
+
+# List available sinks (output) and sources (input)
+pactl list sinks short
+pactl list sources short
+
+# Set your USB device as default (use actual device names from above)
+# Example for EMEET speakerphone:
+pactl set-default-sink alsa_output.usb-EMEET_EMEET_OfficeCore_M0_Plus_<YOUR_DEVICE_ID>.analog-stereo
+pactl set-default-source alsa_input.usb-EMEET_EMEET_OfficeCore_M0_Plus_<YOUR_DEVICE_ID>.analog-stereo
+```
+
+#### 6.4 Make PulseAudio Settings Persistent
+
+```bash
+mkdir -p ~/.config/pulse
+cat > ~/.config/pulse/default.pa << 'EOF'
+.include /etc/pulse/default.pa
+set-default-sink alsa_output.usb-EMEET_EMEET_OfficeCore_M0_Plus_<YOUR_DEVICE_ID>.analog-stereo
+set-default-source alsa_input.usb-EMEET_EMEET_OfficeCore_M0_Plus_<YOUR_DEVICE_ID>.analog-stereo
+EOF
+```
+
+**Note:** Replace the device names with your actual device names from `pactl list sinks short` and `pactl list sources short`.
+
+#### 6.5 Test Audio
+
+```bash
+# Test recording with shared device
+arecord -D mic_share -f S16_LE -c 2 -r 16000 -d 3 /tmp/test.wav
 
 # Test playback
-play /tmp/test.wav
+aplay -D plughw:2,0 /tmp/test.wav
+
+# Test simultaneous recording (both should work without "Device busy" error)
+arecord -D mic_share -f S16_LE -c 2 -r 16000 -d 10 /tmp/test1.wav &
+arecord -D mic_share -f S16_LE -c 2 -r 16000 -d 5 /tmp/test2.wav
 
 # Test Python audio
 source .venv/bin/activate
@@ -317,6 +386,75 @@ source .venv/bin/activate
 python -c "import sounddevice as sd; print(sd.query_devices())"
 ```
 
+### PulseAudio connection refused
+
+```bash
+# Check if PulseAudio is running
+systemctl --user status pulseaudio
+
+# Restart PulseAudio
+systemctl --user restart pulseaudio
+
+# Wait a moment then test
+sleep 2
+pactl info
+```
+
+### PulseAudio sink missing after reboot
+
+```bash
+# Check current sinks
+pactl list sinks short
+
+# If your USB device isn't the default, set it again
+pactl set-default-sink alsa_output.usb-EMEET_EMEET_OfficeCore_M0_Plus_<YOUR_DEVICE_ID>.analog-stereo
+
+# Make sure ~/.config/pulse/default.pa exists with correct settings
+cat ~/.config/pulse/default.pa
+```
+
+### "Device or resource busy" error
+
+This happens when multiple processes try to access the microphone without using the shared `dsnoop` device.
+
+```bash
+# Verify ~/.asoundrc exists
+cat ~/.asoundrc
+
+# If missing, recreate it
+cat > ~/.asoundrc << 'EOF'
+pcm.mic_share {
+    type dsnoop
+    ipc_key 12345
+    slave {
+        pcm "hw:2,0"
+        rate 16000
+        channels 2
+    }
+}
+EOF
+
+# Make sure .env uses mic_share
+grep ARECORD .env
+# Should show: ARECORD_DEVICE=mic_share
+```
+
+### No audio output / "no default audio device"
+
+```bash
+# Check PulseAudio sink
+pactl list sinks short
+pactl get-default-sink
+
+# If shows auto_null or missing, your USB device isn't detected
+# Replug the USB device and restart PulseAudio
+systemctl --user restart pulseaudio
+
+# Verify your USB device is now the default
+pactl list sinks short
+pactl set-default-sink alsa_output.usb-EMEET_EMEET_OfficeCore_M0_Plus_<some_long_string>
+```
+
 ### Permission issues (Raspberry Pi)
 
 ```bash
@@ -355,21 +493,6 @@ Quit and reopen the app after enabling.
 - CPU usage: ~10-20% during wake word listening
 - Wake word latency: ~0.5-1 second
 - Response latency: ~1-3 seconds (API dependent)
-
-### Estimated Monthly Cost by Usage
-
-| Usage Level | Exchanges/month | GPT-5      | GPT-4o-mini |
-| ----------- | --------------- | ---------- | ----------- |
-| Light       | ~50             | $0.03-0.05 | $0.01-0.02  |
-| Moderate    | ~200            | $0.10-0.20 | $0.03-0.05  |
-| Heavy       | ~500            | $0.25-0.50 | $0.08-0.15  |
-
-**Additional costs per exchange:**
-
-- Transcription (gpt-4o-transcribe): ~$0.003-0.006 (5-10 sec audio)
-- TTS (gpt-4o-mini-tts): ~$0.001-0.003 (50-200 chars response)
-
-**Total realistic cost:** Light usage with GPT-5 = **~$0.05-0.10/month** 🎉
 
 ## License
 
