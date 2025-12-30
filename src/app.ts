@@ -116,7 +116,13 @@ function startShutdownListener(): void {
 
   shutdownListenerProcess.stdout?.on('data', async (data: Buffer) => {
     const text = data.toString().trim();
-    if (text === 'SHUTDOWN') {
+
+    // Print all output from shutdown listener for debugging
+    if (text && text !== 'SHUTDOWN') {
+      process.stdout.write(`[shutdown] ${text}\n`);
+    }
+
+    if (text.includes('SHUTDOWN')) {
       console.log('\n🛑 Shutdown phrase detected by background listener');
       killCurrentTTS();
       await new Promise((resolve) => setTimeout(resolve, 200));
@@ -125,19 +131,20 @@ function startShutdownListener(): void {
   });
 
   shutdownListenerProcess.stderr?.on('data', (data: Buffer) => {
-    const msg = data.toString();
-    if (msg.includes('ERROR') || msg.includes('error')) {
-      console.error('Shutdown listener:', msg);
+    const msg = data.toString().trim();
+    if (msg) {
+      console.error(`[shutdown:err] ${msg}`);
     }
   });
 
   shutdownListenerProcess.on('error', (err) => {
-    console.error('Shutdown listener error:', err);
+    console.error('[shutdown] spawn error:', err);
   });
 
   shutdownListenerProcess.on('close', (code) => {
+    console.log(`[shutdown] exited with code ${code}`);
     if (code !== 0 && code !== null && isAppRunning) {
-      console.warn(`Shutdown listener exited with code ${code}`);
+      console.warn(`[shutdown] unexpected exit code ${code}`);
     }
     shutdownListenerProcess = null;
   });

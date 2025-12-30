@@ -36,6 +36,8 @@ COMBINED_GRAMMAR = json.dumps(ALL_PHRASES)
 
 rec = KaldiRecognizer(model, SR, COMBINED_GRAMMAR)
 
+print(f"✅ Shutdown listener ready ({len(ALL_PHRASES)} phrases)", flush=True)
+
 
 def audio_level_bar(data, width=30):
     audio = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
@@ -63,27 +65,17 @@ def handle_result(result: dict) -> bool:
         print("SHUTDOWN", flush=True)
         return True
 
+    # Print any other recognized text for debugging
+    print(f"\r📝 Heard: {text}                    ", flush=True)
     return False
 
 
-def on_signal(signum, frame):
-    sys.exit(0)
-
-
-signal.signal(signal.SIGTERM, on_signal)
-signal.signal(signal.SIGINT, on_signal)
-
-
 def run_linux_arecord():
-    print(
-        f"👂 Listening for shutdown (device={LINUX_DEVICE}, ch={LINUX_CHANNELS}, sr={SR})",
-        flush=True,
-    )
+    print(f"👂 Listening for shutdown (device={LINUX_DEVICE}, ch={LINUX_CHANNELS}, sr={SR})", flush=True)
     print("-" * 50, flush=True)
 
     cmd = [
-        "arecord",
-        "-q",
+        "arecord", "-q",
         "-D", LINUX_DEVICE,
         "-f", "S16_LE",
         "-c", str(LINUX_CHANNELS),
@@ -103,38 +95,27 @@ def run_linux_arecord():
     bytes_per_frame = 2 * LINUX_CHANNELS
     chunk_bytes = BLOCK * bytes_per_frame
 
-    def _drain_stderr(p: subprocess.Popen) -> str:
-        try:
-            if p.stderr is None:
-                return ""
-            data = p.stderr.read() or b""
-            return data.decode("utf-8", errors="replace").strip()
-        except Exception:
-            return ""
-
     def cleanup():
         try:
             proc.terminate()
         except Exception:
             pass
-
         deadline = time.time() + 0.5
         while time.time() < deadline:
             if proc.poll() is not None:
                 return
             time.sleep(0.05)
-
         try:
             proc.kill()
         except Exception:
             pass
 
-    def on_signal_linux(signum, frame):
+    def on_signal(signum, frame):
         cleanup()
         sys.exit(0)
 
-    signal.signal(signal.SIGTERM, on_signal_linux)
-    signal.signal(signal.SIGINT, on_signal_linux)
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
 
     try:
         while True:
@@ -142,12 +123,7 @@ def run_linux_arecord():
 
             if raw == b"":
                 rc = proc.poll()
-                msg = _drain_stderr(proc)
-                print(
-                    f"AUDIO_ERROR: arecord exited (code={rc}). {msg}",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                print(f"AUDIO_ERROR: arecord exited (code={rc})", file=sys.stderr, flush=True)
                 sys.exit(1)
 
             mono = downmix_to_mono(raw, LINUX_CHANNELS)
@@ -174,9 +150,7 @@ def run_non_linux_sounddevice():
             print(f"{status}", file=sys.stderr, flush=True)
         q.put(bytes(indata))
 
-    with sd.RawInputStream(
-        channels=1, samplerate=SR, blocksize=BLOCK, dtype="int16", callback=cb
-    ):
+    with sd.RawInputStream(channels=1, samplerate=SR, blocksize=BLOCK, dtype="int16", callback=cb):
         print("👂 Listening for shutdown (sounddevice)...", flush=True)
         print("-" * 50, flush=True)
 
