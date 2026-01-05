@@ -23,6 +23,7 @@ import { getCachedAudio, cacheAudio, CACHED_PHRASES } from './tts-cache.js';
 
 const IS_LINUX = process.platform === 'linux';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const ASSISTANT_NAME = process.env.ASSISTANT_NAME ?? 'Winter fresh';
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '16000';
 const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'mic_share';
@@ -58,15 +59,14 @@ const STOP_INTENTS = [
   'go to sleep',
   'goodbye',
   'bye',
-  'winter fresh stop',
-  'winterfresh stop',
+  `${ASSISTANT_NAME.toLowerCase()} stop`,
 ];
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
 const system: Msg = {
   role: 'system',
   content: `
-    You are Winterfresh, a helpful voice assistant that prioritizes answering in one sentence.
+    You are ${ASSISTANT_NAME}, a helpful voice assistant that prioritizes answering in one sentence.
     - ${ASSISTANT_RULES},
   `,
 };
@@ -469,7 +469,7 @@ async function transcribeBytes(wavBytes: Buffer): Promise<string> {
   if (process.env.GROQ_API_KEY) {
     const resp = await groq.audio.transcriptions.create({
       model: 'whisper-large-v3-turbo',
-      file: await toFile(wavBytes, 'winterfresh-in.wav'),
+      file: await toFile(wavBytes, `${ASSISTANT_NAME.toLowerCase()}-in.wav`),
     });
     return (resp.text ?? '').trim();
   }
@@ -477,7 +477,7 @@ async function transcribeBytes(wavBytes: Buffer): Promise<string> {
   // Fallback to OpenAI
   const resp = await client.audio.transcriptions.create({
     model: TRANSCRIBE_MODEL,
-    file: await toFile(wavBytes, 'winterfresh-in.wav'),
+    file: await toFile(wavBytes, `${ASSISTANT_NAME.toLowerCase()}-in.wav`),
   });
   return (resp.text ?? '').trim();
 }
@@ -751,13 +751,15 @@ async function startChatSession() {
         // shut down intent detected by ai
         const replyCmd = normalizeSpokenCommand(reply);
         if (replyCmd === 'shutting down') {
-          console.log('🛑 Winterfresh shutting down per sentiment request.');
+          console.log(
+            `🛑 ${ASSISTANT_NAME} shutting down per sentiment request.`,
+          );
           await backToSleep();
           return;
         }
         if (!isAppRunning || abortPending) return;
 
-        console.log('Winterfresh Reply:', reply);
+        console.log(`${ASSISTANT_NAME} Reply:`, reply);
 
         messages.push({ role: 'assistant', content: reply });
         trimHistory(messages);
@@ -779,7 +781,7 @@ async function startChatSession() {
 }
 
 async function restart() {
-  console.log('\n🔄 Restarting Winterfresh...');
+  console.log(`\n🔄 Restarting ${ASSISTANT_NAME}...`);
   await stop();
   // Small delay to ensure resources are freed
   await new Promise((resolve) => setTimeout(resolve, 500));
@@ -817,7 +819,7 @@ function killCurrentRecProcess() {
 }
 
 async function stop() {
-  console.log('\n🛑 Stopping Winterfresh...');
+  console.log(`\n🛑 Stopping ${ASSISTANT_NAME}...`);
   isAppRunning = false;
 
   // Stop shutdown listener
@@ -906,7 +908,7 @@ async function start() {
 }
 
 async function main() {
-  console.log('🌨️  Winterfresh starting...');
+  console.log(`🌨️  ${ASSISTANT_NAME} starting...`);
 
   // Run pre-flight checks (not async, remove await)
   const checksPass = runPreflightChecks();
@@ -917,13 +919,13 @@ async function main() {
 
   // Handle graceful shutdown
   process.on('SIGINT', async () => {
-    console.log('\n🛑 SIGINT received, shutting down Winterfresh...');
+    console.log(`\n🛑 SIGINT received, shutting down ${ASSISTANT_NAME}...`);
     await stop();
     process.exit(0);
   });
 
   process.on('SIGTERM', async () => {
-    console.log('\n🛑 SIGTERM received, shutting down Winterfresh...');
+    console.log(`\n🛑 SIGTERM received, shutting down ${ASSISTANT_NAME}...`);
     await stop();
     process.exit(0);
   });

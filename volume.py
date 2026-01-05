@@ -5,32 +5,22 @@ CHIME_PATH = os.path.join(SCRIPT_DIR, "sounds", "volume-confirm.wav")
 
 ALSA_CARD = os.getenv("ALSA_CARD", "2")
 ALSA_PLAY_DEVICE = os.getenv("ALSA_PLAY_DEVICE", "plughw:2,0")
+ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Winter fresh")
 
 IS_LINUX = os.sys.platform.startswith("linux")
 
 VOLUME_WORDS = [
-  'winter fresh volume zero',
-  'winter fresh volume one',
-  'winter fresh volume two',
-  'winter fresh volume three',
-  'winter fresh volume four',
-  'winter fresh volume five',
-  'winter fresh volume six',
-  'winter fresh volume seven',
-  'winter fresh volume eight',
-  'winter fresh volume nine',
-  'winter fresh volume ten',
-  'hey winter fresh volume zero',
-  'hey winter fresh volume one',
-  'hey winter fresh volume two',
-  'hey winter fresh volume three',
-  'hey winter fresh volume four',
-  'hey winter fresh volume five',
-  'hey winter fresh volume six',
-  'hey winter fresh volume seven',
-  'hey winter fresh volume eight',
-  'hey winter fresh volume nine',
-  'hey winter fresh volume ten',
+  f'{ASSISTANT_NAME.lower()} volume zero',
+  f'{ASSISTANT_NAME.lower()} volume one',
+  f'{ASSISTANT_NAME.lower()} volume two',
+  f'{ASSISTANT_NAME.lower()} volume three',
+  f'{ASSISTANT_NAME.lower()} volume four',
+  f'{ASSISTANT_NAME.lower()} volume five',
+  f'{ASSISTANT_NAME.lower()} volume six',
+  f'{ASSISTANT_NAME.lower()} volume seven',
+  f'{ASSISTANT_NAME.lower()} volume eight',
+  f'{ASSISTANT_NAME.lower()} volume nine',
+  f'{ASSISTANT_NAME.lower()} volume ten',
 ]
 
 def play_chime(volume_level: int):

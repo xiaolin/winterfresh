@@ -1,7 +1,9 @@
+const ASSISTANT_NAME = process.env.ASSISTANT_NAME || 'Winter fresh';
+
 module.exports = {
   apps: [
     {
-      name: 'winterfresh',
+      name: ASSISTANT_NAME,
       script: 'dist/app.js',
       autorestart: true,
       max_restarts: 50,

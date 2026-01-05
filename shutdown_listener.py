@@ -12,9 +12,11 @@ from vosk import Model, KaldiRecognizer
 
 import filler_words
 
+ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Winter fresh")
+
 SHUTDOWN_PHRASES = [
-    'winter fresh stop',
-    'hey winter fresh stop',
+    f'{ASSISTANT_NAME.lower()} stop',
+    f'hey {ASSISTANT_NAME.lower()} stop',
 ]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

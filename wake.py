@@ -9,9 +9,11 @@ from vosk import Model, KaldiRecognizer
 import volume
 import filler_words
 
+ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Winter fresh")
+
 WAKE_WORDS = [
-  'winter fresh',
-  'hey winter fresh',
+  f'{ASSISTANT_NAME.lower()}',
+  f'hey {ASSISTANT_NAME.lower()}',
 ]
 
 MAX_WAKE_WORDS = int(os.getenv("MAX_WAKE_WORDS", "4"))
