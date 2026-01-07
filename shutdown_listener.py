@@ -129,7 +129,8 @@ def run_linux_arecord():
                 sys.exit(1)
 
             mono = downmix_to_mono(raw, LINUX_CHANNELS)
-            bar = audio_level_bar(mono)
+            # enable audio level bar for debugging word capture
+            # bar = audio_level_bar(mono) # Disabled to reduce output noise
 
             if rec.AcceptWaveform(mono):
                 result = json.loads(rec.Result())
@@ -139,7 +140,7 @@ def run_linux_arecord():
             else:
                 partial = json.loads(rec.PartialResult())
                 partial_text = (partial.get("partial", "") or "")[:30]
-                print(f"\r{bar} | {partial_text:30s}", end="", flush=True)
+                # print(f"\r{bar} | {partial_text:30s}", end="", flush=True)
     finally:
         cleanup()
 
@@ -158,7 +159,7 @@ def run_non_linux_sounddevice():
 
         while True:
             data = q.get()
-            bar = audio_level_bar(data)
+            # bar = audio_level_bar(data)
 
             if rec.AcceptWaveform(data):
                 result = json.loads(rec.Result())
@@ -167,7 +168,7 @@ def run_non_linux_sounddevice():
             else:
                 partial = json.loads(rec.PartialResult())
                 partial_text = (partial.get("partial", "") or "")[:30]
-                print(f"\r{bar} | {partial_text:30s}", end="", flush=True)
+                # print(f"\r{bar} | {partial_text:30s}", end="", flush=True)
 
 
 if IS_LINUX:

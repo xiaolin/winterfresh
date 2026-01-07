@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import path from 'node:path';
 import OpenAI, { toFile } from 'openai';
 import Groq from 'groq-sdk';
+import { CartesiaClient } from '@cartesia/cartesia-js';
 
 import {
   chimeWakeDetected,
@@ -25,18 +26,22 @@ const IS_LINUX = process.platform === 'linux';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const ASSISTANT_NAME = process.env.ASSISTANT_NAME ?? 'Winter fresh';
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const cartesia = new CartesiaClient({ apiKey: process.env.CARTESIA_API_KEY });
+// faster TTS but has accent when speaking other languages
+const USE_CARTESIA_TTS = process.env.USE_CARTESIA_TTS === 'true';
+const CARTESIA_VOICE_ID =
+  process.env.CARTESIA_VOICE_ID ?? '829ccd10-f8b3-43cd-b8a0-4aeaa81f3b30';
 const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '16000';
 const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'mic_share';
 const LINUX_ARECORD_RATE = process.env.ARECORD_RATE ?? '16000';
 const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '2';
 const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-4o-mini';
-// Use Groq chat API if you want 4-8x faster chat response times
 const USE_GROQ_CHAT = process.env.USE_GROQ_CHAT === 'true';
-// very fast groq chat model
 const GROQ_CHAT_MODEL = process.env.GROQ_CHAT_MODEL ?? 'groq/compound-mini';
 const TRANSCRIBE_MODEL =
   process.env.TRANSCRIBE_MODEL ?? 'gpt-4o-mini-transcribe';
 const TTS_MODEL = process.env.TTS_MODEL ?? 'tts-1';
+const TTS_VOICE_ID = process.env.TTS_VOICE_ID ?? 'alloy';
 const DEFAULT_RULES = [
   'Prioritize answering in one sentence whenever possible.',
   'Be direct and honest. Never sugarcoat, never be rude.',
@@ -76,7 +81,6 @@ const system: Msg = {
 const MAX_TURNS = Number(process.env.WINTERFRESH_MAX_TURNS ?? 20);
 const IDLE_TIMEOUT_MS = 7000; // 7 seconds
 const HISTORY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-const TTS_VOICE = 'alloy';
 
 let currentTtsProcess: ReturnType<typeof spawn> | null = null;
 let currentRecProcess: ReturnType<typeof spawn> | null = null;
@@ -531,7 +535,10 @@ async function speakTTS(text: string) {
   killCurrentTTS();
   addSpeakingOperation();
 
-  const cachedPath = await getCachedAudio(text, TTS_VOICE);
+  const cachedPath = await getCachedAudio(
+    text,
+    USE_CARTESIA_TTS ? CARTESIA_VOICE_ID : TTS_VOICE_ID,
+  );
   if (cachedPath) {
     console.log('⏱️ tts(cache)=hit');
     const speakProcess = spawn('play', ['-q', cachedPath], {
@@ -550,10 +557,79 @@ async function speakTTS(text: string) {
     return;
   }
 
+  // Use Cartesia for faster TTS
+  if (USE_CARTESIA_TTS && process.env.CARTESIA_API_KEY) {
+    await speakTTSCartesia(text);
+    return;
+  }
+
+  // Fallback to OpenAI TTS
+  await speakTTSOpenAI(text);
+}
+
+async function speakTTSCartesia(text: string) {
+  const tReq = performance.now();
+
+  const response = await cartesia.tts.bytes({
+    modelId: 'sonic-2',
+    transcript: text,
+    voice: {
+      mode: 'id',
+      id: CARTESIA_VOICE_ID,
+    },
+    outputFormat: {
+      container: 'wav',
+      sampleRate: 44100,
+      encoding: 'pcm_s16le',
+    },
+  });
+
+  const tResp = performance.now();
+  console.log(`⏱️ tts(cartesia-api)=${ms(tResp - tReq)}`);
+
+  // Consume the stream to get the actual bytes
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of response) {
+    chunks.push(chunk);
+  }
+  const audioBuffer = Buffer.concat(chunks);
+
+  const tBuffer = performance.now();
+  console.log(`⏱️ tts(cartesia-stream)=${ms(tBuffer - tResp)}`);
+
+  const speakProcess = spawn('play', ['-q', '-t', 'wav', '-'], {
+    stdio: ['pipe', 'inherit', 'inherit'],
+  });
+  currentTtsProcess = speakProcess;
+
+  if (speakProcess.stdin) {
+    speakProcess.stdin.on('error', () => {});
+    speakProcess.stdin.write(audioBuffer);
+    speakProcess.stdin.end();
+  }
+
+  try {
+    await Promise.race([
+      once(speakProcess, 'exit'),
+      once(speakProcess, 'close'),
+    ]);
+  } finally {
+    const tDone = performance.now();
+    console.log(`⏱️ tts(playback)=${ms(tDone - tBuffer)}`);
+    killCurrentTTS();
+  }
+
+  // Now audioBuffer is a proper Buffer, cacheAudio will work
+  if (audioBuffer.length > 0 && CACHED_PHRASES.includes(text)) {
+    await cacheAudio(text, CARTESIA_VOICE_ID, audioBuffer).catch(() => {});
+  }
+}
+
+async function speakTTSOpenAI(text: string) {
   const tReq = performance.now();
   const audio = await client.audio.speech.create({
     model: TTS_MODEL,
-    voice: TTS_VOICE,
+    voice: TTS_VOICE_ID,
     input: text,
     response_format: 'wav',
   });
@@ -620,7 +696,7 @@ async function speakTTS(text: string) {
 
   const fullAudio = Buffer.concat(chunks);
   if (fullAudio.length > 0 && CACHED_PHRASES.includes(text)) {
-    await cacheAudio(text, TTS_VOICE, fullAudio).catch(() => {});
+    await cacheAudio(text, TTS_VOICE_ID, fullAudio).catch(() => {});
   }
 }
 
