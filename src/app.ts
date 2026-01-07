@@ -81,6 +81,9 @@ const TTS_VOICE = 'alloy';
 let currentTtsProcess: ReturnType<typeof spawn> | null = null;
 let currentRecProcess: ReturnType<typeof spawn> | null = null;
 let shutdownListenerProcess: ReturnType<typeof spawn> | null = null;
+let isShutdownListenerStarting = false;
+let wakeListenerProcess: ReturnType<typeof spawn> | null = null;
+let isWakeListenerStarting = false;
 let isAppRunning = false;
 let restartTimeout: NodeJS.Timeout | null = null;
 let historyTimeout: NodeJS.Timeout | null = null;
@@ -105,14 +108,21 @@ const INPUT_VOLUME = 2; // Linux only (linear factor)
 const MAC_GAIN_DB = 6; // ~20*log10(2) = +6.02 dB
 
 // shutdown listener functions
-
 function startShutdownListener(): void {
+  // Prevent duplicate listeners
+  if (shutdownListenerProcess || isShutdownListenerStarting) {
+    console.log('🎧 Shutdown listener already running or starting, skipping');
+    return;
+  }
+  isShutdownListenerStarting = true;
   const pythonPath = path.join(process.cwd(), '.venv', 'bin', 'python');
   const listenerPath = path.join(process.cwd(), 'shutdown_listener.py');
 
   shutdownListenerProcess = spawn(pythonPath, ['-u', listenerPath], {
     stdio: ['inherit', 'pipe', 'pipe'],
   });
+
+  isShutdownListenerStarting = false; // Reset after spawn
 
   shutdownListenerProcess.stdout?.on('data', async (data: Buffer) => {
     const text = data.toString().trim();
@@ -153,6 +163,7 @@ function startShutdownListener(): void {
 }
 
 function stopShutdownListener(): void {
+  isShutdownListenerStarting = false; // Reset flag on stop
   if (shutdownListenerProcess) {
     try {
       shutdownListenerProcess.kill('SIGTERM');
@@ -613,19 +624,26 @@ async function speakTTS(text: string) {
   }
 }
 
-async function waitForWakeWord(): Promise<void> {
+async function startWakeWordListener(): Promise<void> {
+  if (wakeListenerProcess || isWakeListenerStarting) {
+    console.log('🎤 Wake word listener already running or starting, skipping');
+    return;
+  }
   console.log('\n🎤 Listening for wake word (local Vosk)...');
 
+  isWakeListenerStarting = true;
   const pythonPath = path.join(process.cwd(), '.venv', 'bin', 'python');
   const wakePath = path.join(process.cwd(), 'wake.py');
 
   // Use -u flag for unbuffered Python output
-  const wakeProcess = spawn(pythonPath, ['-u', wakePath], {
+  wakeListenerProcess = spawn(pythonPath, ['-u', wakePath], {
     stdio: ['inherit', 'pipe', 'pipe'],
   });
 
+  isWakeListenerStarting = false; // Reset flag on start
+
   return new Promise((resolve, reject) => {
-    wakeProcess.stdout?.on('data', (data: Buffer) => {
+    wakeListenerProcess?.stdout?.on('data', (data: Buffer) => {
       const text = data.toString();
       process.stdout.write(text);
 
@@ -633,21 +651,30 @@ async function waitForWakeWord(): Promise<void> {
         // Kick off warmup immediately, but don't block the user flow.
         // This overlaps with chime + the user starting to talk.
         void warmUpApis();
-        wakeProcess.kill('SIGTERM');
+        wakeListenerProcess?.kill('SIGTERM');
         resolve();
       }
     });
 
-    wakeProcess.stderr?.on('data', (data: Buffer) => {
+    wakeListenerProcess?.stderr?.on('data', (data: Buffer) => {
       process.stderr.write(data);
     });
 
-    wakeProcess.on('error', reject);
-    wakeProcess.on('close', (code) => {
+    wakeListenerProcess?.on('error', (err) => {
+      isWakeListenerStarting = false;
+      wakeListenerProcess = null;
+      reject(err);
+    });
+
+    wakeListenerProcess?.on('close', (code) => {
+      isWakeListenerStarting = false;
+      wakeListenerProcess = null;
       if (code === 0) {
         resolve();
       } else if (code !== null && isAppRunning) {
         reject(new Error(`Wake process exited with code ${code}`));
+      } else {
+        resolve(); // Resolve for null code or when app is stopping
       }
     });
   });
@@ -887,7 +914,7 @@ async function start() {
 
   while (isAppRunning) {
     try {
-      await waitForWakeWord();
+      await startWakeWordListener();
       if (!isAppRunning) break;
 
       recordSuccess(); // Wake word detection succeeded
