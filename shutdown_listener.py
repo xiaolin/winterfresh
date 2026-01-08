@@ -17,6 +17,19 @@ ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Winter fresh")
 SHUTDOWN_PHRASES = [
     f'{ASSISTANT_NAME.lower()} stop',
     f'hey {ASSISTANT_NAME.lower()} stop',
+    'stop',
+    'be quiet',
+    'quiet',
+    'enough',
+    'thats enough',
+    'i got it',
+    'got it',
+    'never mind',
+    'nevermind',
+    'go away',
+    'go to sleep',
+    'goodbye',
+    'bye',
 ]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

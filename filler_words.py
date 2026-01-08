@@ -1,11 +1,17 @@
+import os
+
 # Extra grammar phrases that should NEVER trigger actions.
 # Purpose: reduce forced-decoding into wake/volume by giving the decoder other sinks.
 # NOTE: Only include words/phrases that exist in Vosk's vocabulary.
 
+ASSISTANT_NAME = os.getenv("ASSISTANT_NAME", "Winter fresh")
 
 FILLER_PHRASES = [
   # Common words / phrases
+  f'{ASSISTANT_NAME.lower()}',
   "hello",
+  "goodbye",
+  "bye",
   "hi",
   "hey",
   "ok",
@@ -35,6 +41,7 @@ FILLER_PHRASES = [
   "that",
   "this",
   "was",
+  "enough",
   "were",
   "been",
   "being",
@@ -117,6 +124,7 @@ FILLER_PHRASES = [
 
   # Verbs
   "go",
+  "be",
   "come",
   "get",
   "got",
@@ -153,6 +161,7 @@ FILLER_PHRASES = [
   "become",
   "seem",
   "show",
+  "quiet",
   "hear",
   "move",
   "live",

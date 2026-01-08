@@ -49,25 +49,6 @@ const DEFAULT_RULES = [
   'You should respond in the same language I spoke to you in.',
 ].join('\n- ');
 const ASSISTANT_RULES = process.env.ASSISTANT_RULES ?? DEFAULT_RULES;
-const STOP_INTENTS = [
-  'stop',
-  'shut up',
-  'be quiet',
-  'quiet',
-  'enough',
-  "that's enough",
-  'thats enough',
-  'i got it',
-  'got it',
-  'never mind',
-  'nevermind',
-  'cancel',
-  'go away',
-  'go to sleep',
-  'goodbye',
-  'bye',
-  `${ASSISTANT_NAME.toLowerCase()} stop`,
-];
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
 const system: Msg = {
@@ -756,15 +737,6 @@ async function startWakeWordListener(): Promise<void> {
   });
 }
 
-const STOP_INTENTS_NORMALIZED = new Set(
-  STOP_INTENTS.map(normalizeSpokenCommand),
-);
-
-function isStopIntent(text: string): boolean {
-  const cmd = normalizeSpokenCommand(text);
-  return STOP_INTENTS_NORMALIZED.has(cmd);
-}
-
 async function startChatSession() {
   const messages = conversationHistory;
 
@@ -830,13 +802,6 @@ async function startChatSession() {
 
         if (!isAppRunning || abortPending) return;
 
-        // Check for stop intent (before calling chat)
-        if (isStopIntent(text)) {
-          console.log('🛑 Stop intent detected:', text);
-          await backToSleep();
-          return;
-        }
-
         if (!text) {
           chimeProcessingStop();
           return;
@@ -853,15 +818,6 @@ async function startChatSession() {
         const t3 = performance.now();
         console.log(`⏱️ chat=${ms(t3 - t2)}`);
 
-        // shut down intent detected by ai
-        const replyCmd = normalizeSpokenCommand(reply);
-        if (replyCmd === 'shutting down') {
-          console.log(
-            `🛑 ${ASSISTANT_NAME} shutting down per sentiment request.`,
-          );
-          await backToSleep();
-          return;
-        }
         if (!isAppRunning || abortPending) return;
 
         console.log(`${ASSISTANT_NAME} Reply:`, reply);
