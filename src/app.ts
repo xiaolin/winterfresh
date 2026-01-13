@@ -43,10 +43,9 @@ const TRANSCRIBE_MODEL =
 const TTS_MODEL = process.env.TTS_MODEL ?? 'tts-1';
 const TTS_VOICE_ID = process.env.TTS_VOICE_ID ?? 'alloy';
 const DEFAULT_RULES = [
-  'Prioritize answering in one sentence whenever possible.',
+  'Prioritize answering in one to two sentences.',
   'Be direct and honest. Never sugarcoat, never be rude.',
   'I am transcribing my speech, so you hear an audio transcription, not perfect text.',
-  'You should respond in the same language I spoke to you in.',
 ].join('\n- ');
 const ASSISTANT_RULES = process.env.ASSISTANT_RULES ?? DEFAULT_RULES;
 
