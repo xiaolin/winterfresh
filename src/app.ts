@@ -43,8 +43,13 @@ const TRANSCRIBE_MODEL =
 const TTS_MODEL = process.env.TTS_MODEL ?? 'tts-1';
 const TTS_VOICE_ID = process.env.TTS_VOICE_ID ?? 'alloy';
 const DEFAULT_RULES = [
-  'I am transcribing my speech, so you hear an audio transcription, not perfect text.',
-].join('\n- ');
+  'This is a voice conversation.',
+  'User input is an automatic speech-to-text transcript and may contain errors.',
+  'Reply in plain text',
+  'Do not use markdown.',
+  'Do not use bulleted or numbered lists.',
+  'Prefer one sentence when possible.',
+].join('\n');
 const ASSISTANT_RULES = process.env.ASSISTANT_RULES ?? DEFAULT_RULES;
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
