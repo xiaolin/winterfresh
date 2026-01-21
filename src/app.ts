@@ -590,6 +590,7 @@ async function speakTTSCartesia(text: string) {
     await Promise.race([
       once(speakProcess, 'exit'),
       once(speakProcess, 'close'),
+      new Promise((resolve) => setTimeout(resolve, 60000)), // 60s timeout
     ]);
   } finally {
     const tDone = performance.now();
@@ -663,6 +664,7 @@ async function speakTTSOpenAI(text: string) {
     await Promise.race([
       once(speakProcess, 'exit'),
       once(speakProcess, 'close'),
+      new Promise((resolve) => setTimeout(resolve, 60000)), // 60s timeout
     ]);
   } finally {
     const tDone = performance.now();
