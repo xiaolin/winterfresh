@@ -18,9 +18,6 @@ SHUTDOWN_PHRASES = [
     f'{ASSISTANT_NAME.lower()} stop',
     f'hey {ASSISTANT_NAME.lower()} stop',
     'stop',
-    'stop stop',
-    'stop stop stop',
-    'stop stop stop',
     'be quiet',
     'quiet',
     'enough',
@@ -34,6 +31,9 @@ SHUTDOWN_PHRASES = [
     'goodbye',
     'bye',
 ]
+
+# For grammar, include some stop repeats so Vosk can recognize them
+STOP_REPEATS = [' '.join(['stop'] * i) for i in range(2, 8)]  # "stop stop" through 7x
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(SCRIPT_DIR, "models/vosk-model-small-en-us-0.15")
@@ -49,7 +49,7 @@ IS_LINUX = sys.platform.startswith("linux")
 # Load model
 model = Model(MODEL_PATH)
 
-ALL_PHRASES = SHUTDOWN_PHRASES + filler_words.FILLER_PHRASES
+ALL_PHRASES = SHUTDOWN_PHRASES + STOP_REPEATS + filler_words.FILLER_PHRASES
 COMBINED_GRAMMAR = json.dumps(ALL_PHRASES)
 
 rec = KaldiRecognizer(model, SR, COMBINED_GRAMMAR)
@@ -73,12 +73,19 @@ def downmix_to_mono(raw_bytes: bytes, channels: int) -> bytes:
     return pcm.tobytes()
 
 
+def is_stop_phrase(text: str) -> bool:
+    """Check if text is 'stop' repeated one or more times."""
+    words = text.split()
+    return len(words) > 0 and all(w == 'stop' for w in words)
+
+
 def handle_result(result: dict) -> bool:
     text = (result.get("text", "") or "").lower().strip()
     if not text:
         return False
 
-    if text in SHUTDOWN_PHRASES:
+    # Check explicit shutdown phrases or any number of "stop" repeats
+    if text in SHUTDOWN_PHRASES or is_stop_phrase(text):
         print(f"\r🛑 SHUTDOWN: {text}                    ", flush=True)
         print("SHUTDOWN", flush=True)
         return True
