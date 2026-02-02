@@ -136,14 +136,27 @@ function startShutdownListener(): void {
 
   shutdownListenerProcess.on('error', (err) => {
     console.error('[shutdown] spawn error:', err);
+    shutdownListenerProcess = null; // Clear on spawn error
   });
 
   shutdownListenerProcess.on('close', (code) => {
     console.log(`[shutdown] exited with code ${code}`);
-    if (code !== 0 && code !== null && isAppRunning) {
-      console.warn(`[shutdown] unexpected exit code ${code}`);
-    }
     shutdownListenerProcess = null;
+
+    // Auto-restart if it crashed unexpectedly while app is still running
+    if (code !== 0 && code !== null && isAppRunning) {
+      console.warn(`[shutdown] unexpected exit code ${code}, restarting...`);
+      // Small delay to avoid rapid restart loops
+      setTimeout(() => {
+        if (
+          isAppRunning &&
+          !shutdownListenerProcess &&
+          !isShutdownListenerStarting
+        ) {
+          startShutdownListener();
+        }
+      }, 500);
+    }
   });
 
   console.log('🎧 Shutdown listener started');
