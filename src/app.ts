@@ -53,15 +53,20 @@ const DEFAULT_RULES = [
 const ASSISTANT_RULES = process.env.ASSISTANT_RULES ?? DEFAULT_RULES;
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 const system: Msg = {
   role: 'system',
-  content: `
-    You are ${ASSISTANT_NAME}, a helpful assistant that prioritizes answering in one sentence.
-    - ${ASSISTANT_RULES},
-  `,
+  content: [
+    `You are ${ASSISTANT_NAME}, a helpful assistant that prioritizes answering in one sentence.`,
+    ASSISTANT_RULES,
+  ].join('\n'),
 };
 
-const MAX_TURNS = Number(process.env.WINTERFRESH_MAX_TURNS ?? 20);
+const MAX_TURNS = parsePositiveInteger(process.env.WINTERFRESH_MAX_TURNS, 20);
 const IDLE_TIMEOUT_MS = 7000; // 7 seconds
 const HISTORY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -178,18 +183,6 @@ function ms(n: number) {
   return `${Math.round(n)}ms`;
 }
 
-function normalizeSpokenCommand(text: string): string {
-  return (text ?? '')
-    .toLowerCase()
-    .replace(/[^\w\s]/g, ' ') // drop punctuation
-    .replace(/\s+/g, ' ') // collapse whitespace
-    .trim();
-}
-
-function getRunningOperations(): string[] {
-  return Array.from(currentOperations);
-}
-
 function waitForOperationsCompleteAsync(): Promise<void> {
   return new Promise((resolve) => {
     if (currentOperations.size === 0) {
@@ -197,7 +190,7 @@ function waitForOperationsCompleteAsync(): Promise<void> {
       return;
     }
 
-    const checkInterval = setInterval(async () => {
+    const checkInterval = setInterval(() => {
       if (currentOperations.size === 0) {
         clearInterval(checkInterval);
         resolve();
@@ -419,7 +412,7 @@ async function recordUntilSilenceBytes(
 
   // Arm timeout only if no voice detected yet
   const monitor = setInterval(() => {
-    if (timeoutMs && getRunningOperations().length === 0 && !restartTimeout) {
+    if (timeoutMs && currentOperations.size === 0 && !restartTimeout) {
       restartTimeout = setTimeout(async () => {
         restartTimeout = null;
         killedByTimeout = true;
@@ -513,7 +506,7 @@ async function chat(messages: Msg[]): Promise<string> {
   return resp.choices[0]?.message?.content?.trim() ?? '';
 }
 
-async function killCurrentTTS() {
+function killCurrentTTS() {
   try {
     if (currentTtsProcess) {
       currentTtsProcess.kill('SIGKILL');
