@@ -149,7 +149,7 @@ function startShutdownListener(): void {
     shutdownListenerProcess = null;
 
     // Auto-restart if it crashed unexpectedly while app is still running
-    if (code !== 0 && code !== null && isAppRunning) {
+    if (isAppRunning && code !== 0) {
       console.warn(`[shutdown] unexpected exit code ${code}, restarting...`);
       // Small delay to avoid rapid restart loops
       setTimeout(() => {
