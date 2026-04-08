@@ -35,7 +35,7 @@ const SAMPLE_RATE = process.env.SAMPLE_RATE ?? '16000';
 const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'mic_share';
 const LINUX_ARECORD_RATE = process.env.ARECORD_RATE ?? '16000';
 const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '2';
-const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-4o-mini';
+const CHAT_MODEL = process.env.CHAT_MODEL ?? 'gpt-5.4-mini';
 const USE_GROQ_CHAT = process.env.USE_GROQ_CHAT === 'true';
 const GROQ_CHAT_MODEL = process.env.GROQ_CHAT_MODEL ?? 'groq/compound-mini';
 const TRANSCRIBE_MODEL =
@@ -53,7 +53,10 @@ const DEFAULT_RULES = [
 const ASSISTANT_RULES = process.env.ASSISTANT_RULES ?? DEFAULT_RULES;
 
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
-function parsePositiveInteger(value: string | undefined, fallback: number): number {
+function parsePositiveInteger(
+  value: string | undefined,
+  fallback: number,
+): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
