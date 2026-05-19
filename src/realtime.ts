@@ -33,6 +33,9 @@ const ASSISTANT_NAME = process.env.ASSISTANT_NAME ?? 'Winter fresh';
 const REALTIME_MODEL = process.env.REALTIME_MODEL ?? 'gpt-realtime-2';
 // marin / cedar are the highest quality GA voices.
 const REALTIME_VOICE = process.env.REALTIME_VOICE ?? 'marin';
+// server_vad is more robust on a far-field conference mic than semantic_vad.
+const REALTIME_VAD =
+  process.env.REALTIME_VAD === 'semantic' ? 'semantic_vad' : 'server_vad';
 
 const DEFAULT_RULES = [
   'Keep replies short and conversational — usually one sentence.',
@@ -250,6 +253,13 @@ function startPlayer(): ReturnType<typeof spawn> {
         { stdio: ['pipe', 'inherit', 'inherit'] },
       );
   p.stdin?.on('error', () => {});
+  p.on('error', (err) => console.error('🔇 player spawn error:', err));
+  p.on('exit', (code, sig) => {
+    if (code) console.error(`🔇 player exited code=${code} sig=${sig}`);
+  });
+  console.log(
+    `🔊 player started (${IS_LINUX ? `aplay ${ALSA_PLAY_DEVICE}` : 'play'})`,
+  );
   return p;
 }
 
@@ -289,7 +299,13 @@ async function runSession(): Promise<void> {
   const rt = new OpenAIRealtimeWS({ model: REALTIME_MODEL }, client);
 
   let mic: ReturnType<typeof spawn> | null = null;
-  let player: ReturnType<typeof spawn> | null = startPlayer();
+  // Opened lazily on the first audio delta so it doesn't hold the single-open
+  // EMEET device during the wake chime (which would fail "device busy").
+  let player: ReturnType<typeof spawn> | null = null;
+  const ensurePlayer = () => {
+    if (!player) player = startPlayer();
+    return player;
+  };
   let idleTimer: NodeJS.Timeout | null = null;
   let ended = false;
 
@@ -404,9 +420,7 @@ async function runSession(): Promise<void> {
               noise_reduction: { type: 'far_field' },
               // Cheap async transcript, useful for logging only.
               transcription: { model: 'whisper-1' },
-              // Semantic VAD: waits through trailing "uhh/hmm" instead of
-              // cutting the user off on a pause — far more natural turns.
-              turn_detection: { type: 'semantic_vad', create_response: true },
+              turn_detection: { type: REALTIME_VAD, create_response: true },
             },
             output: {
               format: { type: 'audio/pcm', rate: RT_RATE },
@@ -422,7 +436,11 @@ async function runSession(): Promise<void> {
     rt.on('response.created', () => {
       activeResponse = true;
       suppressAudio = false; // a new reply has begun; play it
+      console.log('🧠 response.created');
     });
+    rt.on('input_audio_buffer.speech_stopped', () =>
+      console.log('🗣️ speech_stopped (your turn ended)'),
+    );
 
     rt.on('session.updated', async () => {
       if (mic) return; // configure once
@@ -439,7 +457,10 @@ async function runSession(): Promise<void> {
       bumpIdle();
 
       mic = startMic();
+      let micBytes = 0;
       mic.stdout?.on('data', (buf: Buffer) => {
+        micBytes += buf.length;
+        if (micBytes - buf.length === 0) console.log('🎤 mic producing audio');
         rt.send({
           type: 'input_audio_buffer.append',
           audio: buf.toString('base64'),
@@ -458,18 +479,21 @@ async function runSession(): Promise<void> {
         curItemId = e.item_id;
         curContentIndex = e.content_index;
         playedBytes = 0;
+        console.log('🔊 first audio delta for', e.item_id);
       }
       activeResponse = true;
       if (suppressAudio) return; // tail of a cancelled (barged-in) response
-      if (player?.stdin && !player.stdin.destroyed) {
+      const p = ensurePlayer();
+      if (p?.stdin && !p.stdin.destroyed) {
         const chunk = Buffer.from(e.delta, 'base64');
         playedBytes += chunk.length;
-        player.stdin.write(chunk);
+        p.stdin.write(chunk);
       }
     });
 
     // Barge-in: user started talking while the model was speaking.
     rt.on('input_audio_buffer.speech_started', () => {
+      console.log('🎙️ speech_started (mic heard you)');
       bumpIdle();
       if (activeResponse) {
         // Only cancel a response that actually exists (avoids noisy errors).
@@ -497,6 +521,7 @@ async function runSession(): Promise<void> {
 
     rt.on('response.done', () => {
       activeResponse = false;
+      console.log('✅ response.done');
       bumpIdle();
     });
 
