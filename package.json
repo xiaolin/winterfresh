@@ -5,20 +5,25 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/app.ts",
+    "dev:realtime": "tsx src/realtime.ts",
     "build": "tsc",
     "start": "node dist/app.js",
-    "deploy": "git pull && npm install && npm run build && pm2 reload winterfresh"
+    "start:realtime": "node dist/realtime.js",
+    "deploy": "git pull && npm install && npm run build && pm2 reload winterfresh",
+    "deploy:realtime": "git pull && npm install && npm run build && (pm2 delete all || true) && pm2 start pm2.config.cjs --only winterfresh-realtime && pm2 save"
   },
   "keywords": [],
   "dependencies": {
     "@cartesia/cartesia-js": "^2.2.9",
     "dotenv": "^16.5.0",
     "groq-sdk": "^0.37.0",
-    "openai": "^5.1.0"
+    "openai": "^5.1.0",
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
     "@types/node": "^22.15.21",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3"
   }
