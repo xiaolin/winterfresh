@@ -129,6 +129,10 @@ const RT_RATE = 24000;
 const ALSA_PLAY_DEVICE = process.env.ALSA_PLAY_DEVICE ?? 'plughw:2,0';
 const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'mic_share';
 const MAC_GAIN_DB = 6;
+// Linux makeup gain, applied in-process to the ch0 mono stream. macOS already
+// gains via sox `rec ... gain`; the Linux arecord path had none, so Realtime
+// got a quieter signal than the wake listener. Override: REALTIME_MIC_GAIN_DB.
+const MIC_GAIN_DB = Number(process.env.REALTIME_MIC_GAIN_DB ?? '6');
 
 // Close the session after this much inactivity to bound cost (always-on device).
 const IDLE_TIMEOUT_MS = Number(process.env.REALTIME_IDLE_MS ?? '7000');
@@ -154,6 +158,25 @@ function pcmLevelPct(buf: Buffer): number {
 function audioMs(buf: Buffer): number {
   // 24kHz mono 16-bit PCM = 48 bytes/ms.
   return buf.length / 48;
+}
+
+// Linux mic is captured 2-channel like wake.py, which deliberately PICKS
+// channel 0 rather than averaging — the EMEET's two channels aren't a clean
+// stereo pair, so ALSA's plug-average downmix loses ~6dB and can phase-cancel
+// speech (why Realtime "couldn't hear you" while the wake word could). This
+// deinterleaves channel 0 to mono and applies makeup gain to match the wake
+// path's effective level. Input is S16LE stereo: [L0 R0 L1 R1 ...].
+const MIC_GAIN = 10 ** (MIC_GAIN_DB / 20);
+function micCh0Mono(stereo: Buffer): Buffer {
+  const frames = Math.floor(stereo.length / 4); // 2ch × 2 bytes/sample
+  const out = Buffer.allocUnsafe(frames * 2);
+  for (let i = 0; i < frames; i++) {
+    let s = Math.round(stereo.readInt16LE(i * 4) * MIC_GAIN); // channel 0
+    if (s > 32767) s = 32767;
+    else if (s < -32768) s = -32768;
+    out.writeInt16LE(s, i * 2);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -252,10 +275,11 @@ function startShutdownListener(onShutdown: () => void): () => void {
 // ---------------------------------------------------------------------------
 function startMic(): ReturnType<typeof spawn> {
   if (IS_LINUX) {
-    // No sox: ALSA's `plug` plugin resamples/downmixes the shared mic_share
-    // (dsnoop) device to exactly 24kHz mono raw, so arecord emits the format
-    // Realtime needs directly. Spawned like shutdown_listener.py's arecord,
-    // which is the proven-working primitive on the Pi.
+    // No sox: ALSA's `plug` plugin resamples the shared mic_share (dsnoop)
+    // device to 24kHz raw. Capture 2 channels (NOT 1) so plug only resamples
+    // and does NOT average-downmix — micCh0Mono() then picks channel 0 in
+    // Node, exactly like wake.py. Spawned like shutdown_listener.py's
+    // arecord, the proven-working primitive on the Pi.
     return spawn(
       'arecord',
       [
@@ -265,7 +289,7 @@ function startMic(): ReturnType<typeof spawn> {
         '-f',
         'S16_LE',
         '-c',
-        '1',
+        '2',
         '-r',
         String(RT_RATE),
         '-t',
@@ -598,7 +622,10 @@ async function runSession(): Promise<void> {
           audio: buf.toString('base64'),
         });
       };
-      mic.stdout?.on('data', (buf: Buffer) => {
+      mic.stdout?.on('data', (raw: Buffer) => {
+        // Linux captures 2ch; pick channel 0 + gain to mono (see micCh0Mono).
+        // macOS `rec` already emits gained 24k mono, so pass through.
+        const buf = IS_LINUX ? micCh0Mono(raw) : raw;
         const first = micBytes === 0;
         micBytes += buf.length;
         if (first) console.log('🎤 mic producing audio');
