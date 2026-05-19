@@ -29,7 +29,7 @@ const IS_LINUX = process.platform === 'linux';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const ASSISTANT_NAME = process.env.ASSISTANT_NAME ?? 'Winter fresh';
-const REALTIME_MODEL = process.env.REALTIME_MODEL ?? 'gpt-realtime-2';
+const REALTIME_MODEL = process.env.REALTIME_MODEL ?? 'gpt-realtime-mini';
 // marin / cedar are the highest quality GA voices.
 const REALTIME_VOICE = process.env.REALTIME_VOICE ?? 'marin';
 // semantic_vad uses a turn-detection model, so static / non-speech noise
@@ -61,6 +61,21 @@ const turnDetection =
         silence_duration_ms: REALTIME_VAD_SILENCE_MS,
       } as const);
 
+// Truncation only fires once a conversation exceeds the model's token
+// limit. For short sessions (~30s, rarely >3min) that never happens, so
+// `auto` (= retention_ratio 1.0) keeps full context AND is cheapest: it
+// doesn't bust the prompt cache the way a <1 ratio does. retention_ratio
+// is only worth setting for very long sessions, via REALTIME_RETENTION.
+const REALTIME_TRUNCATION =
+  process.env.REALTIME_TRUNCATION === 'disabled'
+    ? ('disabled' as const)
+    : process.env.REALTIME_RETENTION
+      ? ({
+          type: 'retention_ratio',
+          retention_ratio: Number(process.env.REALTIME_RETENTION),
+        } as const)
+      : ('auto' as const);
+
 const DEFAULT_RULES = [
   'Keep replies short and conversational — usually one sentence.',
   "Speak naturally and don't over-explain.",
@@ -72,13 +87,15 @@ const INSTRUCTIONS = [
   ASSISTANT_RULES,
 ].join(' ');
 
-// Deterministic spoken bookends so start/stop are always recognizable.
+// Deterministic spoken bookends, played from a LOCAL cached WAV (OpenAI
+// tts-1, synthesized once then reused) — never via the Realtime model, so
+// wake/sleep cost $0 in audio tokens.
 const GREETING = process.env.REALTIME_GREETING ?? 'Hi, what’s up?';
 const GOODBYE = process.env.REALTIME_GOODBYE ?? 'Okay, see ya next time.';
-// Voice for the locally-played goodbye (OpenAI tts-1; cached after first use).
-const GOODBYE_VOICE = process.env.REALTIME_GOODBYE_VOICE ?? 'alloy';
-const sayExactly = (line: string) =>
-  `Say exactly and only this, then stop. Do not add anything: "${line}"`;
+const CLIP_VOICE =
+  process.env.REALTIME_CLIP_VOICE ??
+  process.env.REALTIME_GOODBYE_VOICE ??
+  'alloy';
 
 // Realtime PCM is fixed at 24kHz mono, 16-bit, little-endian.
 const RT_RATE = 24000;
@@ -204,11 +221,16 @@ function startMic(): ReturnType<typeof spawn> {
       'arecord',
       [
         '-q',
-        '-D', `plug:${LINUX_ARECORD_DEVICE}`,
-        '-f', 'S16_LE',
-        '-c', '1',
-        '-r', String(RT_RATE),
-        '-t', 'raw',
+        '-D',
+        `plug:${LINUX_ARECORD_DEVICE}`,
+        '-f',
+        'S16_LE',
+        '-c',
+        '1',
+        '-r',
+        String(RT_RATE),
+        '-t',
+        'raw',
       ],
       { stdio: ['ignore', 'pipe', 'pipe'] },
     );
@@ -303,6 +325,53 @@ function killProc(p: ReturnType<typeof spawn> | null) {
 }
 
 // ---------------------------------------------------------------------------
+// Local cached TTS clips (greeting/goodbye). Synthesized once via tts-1,
+// cached as WAV, then played locally — never through the Realtime model, so
+// these fixed phrases cost $0 in audio tokens on every wake/sleep.
+// ---------------------------------------------------------------------------
+async function getClipFile(text: string, voice: string): Promise<string> {
+  const cached = await getCachedAudio(text, voice);
+  if (cached) return cached;
+  const audio = await client.audio.speech.create({
+    model: 'tts-1',
+    voice,
+    input: text,
+    response_format: 'wav',
+  });
+  return cacheAudio(text, voice, Buffer.from(await audio.arrayBuffer()));
+}
+
+async function prewarmClip(text: string, voice: string): Promise<void> {
+  try {
+    if (await getCachedAudio(text, voice)) return;
+    await getClipFile(text, voice);
+    console.log(`🗣️  cached clip: "${text}"`);
+  } catch (err) {
+    console.warn(`clip pre-warm failed ("${text}"):`, err);
+  }
+}
+
+async function playClipLocally(text: string, voice: string): Promise<void> {
+  try {
+    const file = await getClipFile(text, voice);
+    const p = IS_LINUX
+      ? spawn('aplay', ['-q', '-D', ALSA_PLAY_DEVICE, file], {
+          stdio: ['ignore', 'inherit', 'inherit'],
+        })
+      : spawn('play', ['-q', file], {
+          stdio: ['ignore', 'inherit', 'inherit'],
+        });
+    await Promise.race([
+      once(p, 'close'),
+      once(p, 'exit'),
+      new Promise((r) => setTimeout(r, 8000)),
+    ]);
+  } catch (err) {
+    console.warn(`clip playback failed ("${text}"):`, err);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // One Realtime conversation session. Resolves when it ends (shutdown / idle /
 // error / disconnect); the outer loop then returns to the wake word.
 // ---------------------------------------------------------------------------
@@ -393,33 +462,7 @@ async function runSession(): Promise<void> {
         rt.close();
       } catch {}
 
-      try {
-        let file = await getCachedAudio(GOODBYE, GOODBYE_VOICE);
-        if (!file) {
-          const audio = await client.audio.speech.create({
-            model: 'tts-1',
-            voice: GOODBYE_VOICE,
-            input: GOODBYE,
-            response_format: 'wav',
-          });
-          const buf = Buffer.from(await audio.arrayBuffer());
-          file = await cacheAudio(GOODBYE, GOODBYE_VOICE, buf);
-        }
-        const p = IS_LINUX
-          ? spawn('aplay', ['-q', '-D', ALSA_PLAY_DEVICE, file], {
-              stdio: ['ignore', 'inherit', 'inherit'],
-            })
-          : spawn('play', ['-q', file], {
-              stdio: ['ignore', 'inherit', 'inherit'],
-            });
-        await Promise.race([
-          once(p, 'close'),
-          once(p, 'exit'),
-          new Promise((r) => setTimeout(r, 8000)),
-        ]);
-      } catch (err) {
-        console.warn('goodbye playback failed:', err);
-      }
+      await playClipLocally(GOODBYE, CLIP_VOICE);
 
       end(why);
     };
@@ -457,6 +500,9 @@ async function runSession(): Promise<void> {
           output_modalities: ['audio'],
           // Backstop against an occasional runaway monologue (cost + brevity).
           max_output_tokens: 512,
+          // Bound re-fed audio context so input cost stops scaling with
+          // session length (see REALTIME_TRUNCATION).
+          truncation: REALTIME_TRUNCATION,
           audio: {
             input: {
               format: { type: 'audio/pcm', rate: RT_RATE },
@@ -493,19 +539,12 @@ async function runSession(): Promise<void> {
 
     rt.on('session.updated', async () => {
       if (mic) return; // configure once
-      console.log('🎤 Streaming mic — speak now (barge-in supported)');
-      // No wake chime here: it's a separate sox `play` that fights the
-      // single-open EMEET device right before the greeting. The spoken
-      // greeting is the readiness signal instead.
-      // Deterministic greeting (otherwise the model ad-libs random openers).
-      rt.send({
-        type: 'response.create',
-        response: {
-          instructions: sayExactly(GREETING),
-          output_modalities: ['audio'],
-        },
-      });
-      armIdle(); // safety until the greeting response starts
+      // Greeting is a LOCAL cached clip, not a model response — $0 audio
+      // tokens, deterministic, instant, and frees the model from speaking a
+      // fixed phrase on every wake. (No wake chime: a separate sox `play`
+      // fought the single-open EMEET device; this clip is the readiness cue.)
+      await playClipLocally(GREETING, CLIP_VOICE);
+      armIdle(); // start the idle countdown; the user speaks next
 
       mic = startMic();
       let micBytes = 0;
@@ -659,25 +698,10 @@ async function main() {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  // Pre-warm the goodbye clip so the first shutdown is also instant + offline.
+  // Pre-warm both bookend clips so the first wake/shutdown is instant+offline.
   void (async () => {
-    try {
-      if (await getCachedAudio(GOODBYE, GOODBYE_VOICE)) return;
-      const audio = await client.audio.speech.create({
-        model: 'tts-1',
-        voice: GOODBYE_VOICE,
-        input: GOODBYE,
-        response_format: 'wav',
-      });
-      await cacheAudio(
-        GOODBYE,
-        GOODBYE_VOICE,
-        Buffer.from(await audio.arrayBuffer()),
-      );
-      console.log('🗣️  Goodbye clip cached');
-    } catch (err) {
-      console.warn('goodbye pre-warm failed (will synth on demand):', err);
-    }
+    await prewarmClip(GREETING, CLIP_VOICE);
+    await prewarmClip(GOODBYE, CLIP_VOICE);
   })();
 
   await start();
