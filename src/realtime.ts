@@ -48,7 +48,10 @@ const REALTIME_VAD_SILENCE_MS = Number(
   process.env.REALTIME_VAD_SILENCE_MS ?? '500',
 );
 const REALTIME_MAX_OUTPUT_TOKENS = Number(
-  process.env.REALTIME_MAX_OUTPUT_TOKENS ?? '160',
+  // Realtime output budget includes more than the visible spoken words
+  // (for example reasoning/text/audio token details), so 160 can cut off
+  // normal replies mid-sentence. Keep the old 512 default and let env tune it.
+  process.env.REALTIME_MAX_OUTPUT_TOKENS ?? '512',
 );
 const REALTIME_INPUT_TRANSCRIPTION =
   process.env.REALTIME_INPUT_TRANSCRIPTION === 'true';
