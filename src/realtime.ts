@@ -29,7 +29,7 @@ const IS_LINUX = process.platform === 'linux';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const ASSISTANT_NAME = process.env.ASSISTANT_NAME ?? 'Winter fresh';
-const REALTIME_MODEL = process.env.REALTIME_MODEL ?? 'gpt-realtime-mini';
+const REALTIME_MODEL = process.env.REALTIME_MODEL ?? 'gpt-realtime-2';
 // marin / cedar are the highest quality GA voices.
 const REALTIME_VOICE = process.env.REALTIME_VOICE ?? 'marin';
 // semantic_vad uses a turn-detection model, so static / non-speech noise
