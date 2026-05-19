@@ -133,6 +133,19 @@ const MAC_GAIN_DB = 6;
 // gains via sox `rec ... gain`; the Linux arecord path had none, so Realtime
 // got a quieter signal than the wake listener. Override: REALTIME_MIC_GAIN_DB.
 const MIC_GAIN_DB = Number(process.env.REALTIME_MIC_GAIN_DB ?? '6');
+// Server-side noise reduction. The EMEET already does hardware NR/AEC, so
+// stacking OpenAI's far_field gate on top can over-suppress quiet far-field
+// speech. far|near|off so it can be A/B'd on-device. Default far (prior
+// behavior); 'off' is the first thing to try if far speech mis-transcribes.
+const NOISE_REDUCTION = (
+  process.env.REALTIME_NOISE_REDUCTION ?? 'far'
+).toLowerCase();
+const noiseReduction =
+  NOISE_REDUCTION === 'off'
+    ? null
+    : NOISE_REDUCTION === 'near'
+      ? ({ type: 'near_field' } as const)
+      : ({ type: 'far_field' } as const);
 
 // Close the session after this much inactivity to bound cost (always-on device).
 const IDLE_TIMEOUT_MS = Number(process.env.REALTIME_IDLE_MS ?? '7000');
@@ -570,8 +583,9 @@ async function runSession(): Promise<void> {
           audio: {
             input: {
               format: { type: 'audio/pcm', rate: RT_RATE },
-              // Conference mic on a Pi -> far_field noise reduction.
-              noise_reduction: { type: 'far_field' },
+              // Server NR (REALTIME_NOISE_REDUCTION=far|near|off). Omit the
+              // key entirely when off so no server-side gate is applied.
+              ...(noiseReduction ? { noise_reduction: noiseReduction } : {}),
               turn_detection: turnDetection,
             },
             output: {
@@ -611,6 +625,7 @@ async function runSession(): Promise<void> {
       mic = startMic();
       let micBytes = 0;
       let sentMicBytes = 0;
+      let micPeakPct = 0; // loudest sample since the last heartbeat
       let localSpeechActive = false;
       let quietMs = 0;
       let preRollMs = 0;
@@ -628,6 +643,8 @@ async function runSession(): Promise<void> {
         const buf = IS_LINUX ? micCh0Mono(raw) : raw;
         const first = micBytes === 0;
         micBytes += buf.length;
+        const lvl = pcmLevelPct(buf);
+        if (lvl > micPeakPct) micPeakPct = lvl;
         if (first) console.log('🎤 mic producing audio');
 
         if (!REALTIME_LOCAL_VAD) {
@@ -689,8 +706,9 @@ async function runSession(): Promise<void> {
       // Heartbeat: prove whether the pipeline is actually producing samples.
       const micWatch = setInterval(() => {
         console.log(
-          `🎤 mic bytes so far: ${micBytes} (sent=${sentMicBytes})`,
+          `🎤 mic bytes so far: ${micBytes} (sent=${sentMicBytes}) peak=${micPeakPct.toFixed(1)}%`,
         );
+        micPeakPct = 0; // reset so each window shows a fresh peak
       }, 2000);
       mic.on('error', (err) => console.error('[mic] spawn error:', err));
       mic.on('close', (code) => {
