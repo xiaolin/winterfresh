@@ -133,10 +133,6 @@ const MAC_GAIN_DB = 6;
 // gains via sox `rec ... gain`; the Linux arecord path had none, so Realtime
 // got a quieter signal than the wake listener. Override: REALTIME_MIC_GAIN_DB.
 const MIC_GAIN_DB = Number(process.env.REALTIME_MIC_GAIN_DB ?? '6');
-// Which channel of the 2ch EMEET stream to use (0=default/proven, 1=A/B).
-// Some speakerphones put processed voice on one channel and a reference/raw
-// feed on the other — A/B with REALTIME_MIC_CHANNEL to find the cleaner one.
-const MIC_CHANNEL = process.env.REALTIME_MIC_CHANNEL === '1' ? 1 : 0;
 // Server-side noise reduction. The EMEET already does hardware NR/AEC, so
 // stacking OpenAI's far_field gate on top can over-suppress quiet far-field
 // speech. far|near|off so it can be A/B'd on-device. Default far (prior
@@ -177,19 +173,19 @@ function audioMs(buf: Buffer): number {
   return buf.length / 48;
 }
 
-// Linux mic is captured 2-channel like wake.py, which deliberately PICKS one
-// channel rather than averaging — the EMEET's two channels aren't a clean
+// Linux mic is captured 2-channel like wake.py, which deliberately PICKS
+// channel 0 rather than averaging — the EMEET's two channels aren't a clean
 // stereo pair, so ALSA's plug-average downmix loses ~6dB and can phase-cancel
-// speech (why Realtime "couldn't hear you" while the wake word could). This
-// deinterleaves the selected channel to mono and applies makeup gain to match
-// the wake path's effective level. Input is S16LE stereo: [L0 R0 L1 R1 ...].
+// speech (why Realtime "couldn't hear you" while the wake word could). ch0 vs
+// ch1 was A/B-tested on-device and found equivalent, so ch0 stays fixed. This
+// deinterleaves channel 0 to mono and applies makeup gain to match the wake
+// path's effective level. Input is S16LE stereo: [L0 R0 L1 R1 ...].
 const MIC_GAIN = 10 ** (MIC_GAIN_DB / 20);
-const MIC_CH_BYTE = MIC_CHANNEL * 2; // byte offset of the chosen channel
 function micCh0Mono(stereo: Buffer): Buffer {
   const frames = Math.floor(stereo.length / 4); // 2ch × 2 bytes/sample
   const out = Buffer.allocUnsafe(frames * 2);
   for (let i = 0; i < frames; i++) {
-    let s = Math.round(stereo.readInt16LE(i * 4 + MIC_CH_BYTE) * MIC_GAIN);
+    let s = Math.round(stereo.readInt16LE(i * 4) * MIC_GAIN); // channel 0
     if (s > 32767) s = 32767;
     else if (s < -32768) s = -32768;
     out.writeInt16LE(s, i * 2);
@@ -651,9 +647,7 @@ async function runSession(): Promise<void> {
         const lvl = pcmLevelPct(buf);
         if (lvl > micPeakPct) micPeakPct = lvl;
         if (first)
-          console.log(
-            `🎤 mic producing audio (ch=${MIC_CHANNEL}, gain=${MIC_GAIN_DB}dB)`,
-          );
+          console.log(`🎤 mic producing audio (gain=${MIC_GAIN_DB}dB)`);
 
         if (!REALTIME_LOCAL_VAD) {
           sendAudio(buf);
