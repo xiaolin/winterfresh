@@ -53,21 +53,6 @@ const REALTIME_MAX_OUTPUT_TOKENS = Number(
   // normal replies mid-sentence. Keep the old 512 default and let env tune it.
   process.env.REALTIME_MAX_OUTPUT_TOKENS ?? '512',
 );
-const REALTIME_INPUT_TRANSCRIPTION =
-  process.env.REALTIME_INPUT_TRANSCRIPTION === 'true';
-type RealtimeTranscriptionModel =
-  | 'whisper-1'
-  | 'gpt-4o-transcribe'
-  | 'gpt-4o-mini-transcribe'
-  | 'gpt-4o-transcribe-latest';
-const REALTIME_TRANSCRIPTION_MODEL = ([
-  'whisper-1',
-  'gpt-4o-transcribe',
-  'gpt-4o-mini-transcribe',
-  'gpt-4o-transcribe-latest',
-].includes(process.env.REALTIME_TRANSCRIPTION_MODEL ?? '')
-  ? process.env.REALTIME_TRANSCRIPTION_MODEL
-  : 'gpt-4o-mini-transcribe') as RealtimeTranscriptionModel;
 const REALTIME_LOCAL_VAD = process.env.REALTIME_LOCAL_VAD !== 'false';
 // Local gate drops obvious non-speech before it reaches Realtime. This reduces
 // false server VAD commits from room noise, which are the expensive mistakes.
@@ -561,11 +546,6 @@ async function runSession(): Promise<void> {
               format: { type: 'audio/pcm', rate: RT_RATE },
               // Conference mic on a Pi -> far_field noise reduction.
               noise_reduction: { type: 'far_field' },
-              // Off by default: input transcription is billed separately and
-              // this app only used it for logs.
-              ...(REALTIME_INPUT_TRANSCRIPTION
-                ? { transcription: { model: REALTIME_TRANSCRIPTION_MODEL } }
-                : {}),
               turn_detection: turnDetection,
             },
             output: {
@@ -765,10 +745,6 @@ async function runSession(): Promise<void> {
       armIdle(remaining + 500); // +0.5s margin for buffer/startup latency
     });
 
-    rt.on('conversation.item.input_audio_transcription.completed', (e) => {
-      if (e.transcript) console.log('You:', e.transcript.trim());
-      if (e.usage) console.log('💸 transcription usage:', JSON.stringify(e.usage));
-    });
     rt.on('response.output_audio_transcript.done', (e) => {
       if (e.transcript) console.log(`${ASSISTANT_NAME}:`, e.transcript.trim());
     });
