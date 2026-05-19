@@ -346,6 +346,10 @@ async function runSession(): Promise<void> {
   // tail, but we do NOT kill the player — respawning aplay on the Pi's
   // single-open hw device collides and kills all further audio.
   let suppressAudio = false;
+  // Per-response playback estimate so the idle timer waits for long replies
+  // to finish playing (response.done fires when generated, not when played).
+  let respFirstWriteAt = 0;
+  let respBytes = 0;
 
   let closing = false; // a goodbye is being spoken before teardown
 
@@ -431,12 +435,14 @@ async function runSession(): Promise<void> {
         idleTimer = null;
       }
     };
-    const armIdle = () => {
+    // extraMs delays the countdown start (e.g. until queued audio finishes
+    // playing) so a long spoken reply doesn't get cut off by the timeout.
+    const armIdle = (extraMs = 0) => {
       if (closing || ended) return;
       clearIdle();
       idleTimer = setTimeout(
         () => goodbyeAndEnd('idle timeout'),
-        IDLE_TIMEOUT_MS,
+        IDLE_TIMEOUT_MS + Math.max(0, extraMs),
       );
     };
 
@@ -474,6 +480,8 @@ async function runSession(): Promise<void> {
     rt.on('response.created', () => {
       activeResponse = true;
       suppressAudio = false; // a new reply has begun; play it
+      respFirstWriteAt = 0;
+      respBytes = 0;
       console.log('🧠 response.created');
       clearIdle(); // model is active
     });
@@ -542,6 +550,8 @@ async function runSession(): Promise<void> {
       if (p?.stdin && !p.stdin.destroyed) {
         const chunk = Buffer.from(e.delta, 'base64');
         playedBytes += chunk.length;
+        if (respBytes === 0) respFirstWriteAt = Date.now();
+        respBytes += chunk.length;
         p.stdin.write(chunk);
       }
     });
@@ -576,13 +586,22 @@ async function runSession(): Promise<void> {
       killProc(player);
       player = null;
       playedBytes = 0;
+      respBytes = 0;
+      respFirstWriteAt = 0;
       curItemId = null;
     });
 
     rt.on('response.done', () => {
       activeResponse = false;
       console.log('✅ response.done');
-      armIdle(); // back to waiting for the user
+      // response.done = finished GENERATING, not finished PLAYING. Estimate
+      // how much queued audio is still draining (24kHz mono 16-bit = 48
+      // bytes/ms) and delay the idle countdown until after it plays out, so
+      // a long spoken reply isn't cut off by the timeout.
+      const playMs = respBytes / 48;
+      const elapsed = respFirstWriteAt ? Date.now() - respFirstWriteAt : 0;
+      const remaining = Math.max(0, playMs - elapsed);
+      armIdle(remaining + 500); // +0.5s margin for buffer/startup latency
     });
 
     rt.on('conversation.item.input_audio_transcription.completed', (e) => {
