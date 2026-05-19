@@ -47,6 +47,36 @@ const REALTIME_VAD_THRESHOLD = Number(
 const REALTIME_VAD_SILENCE_MS = Number(
   process.env.REALTIME_VAD_SILENCE_MS ?? '500',
 );
+const REALTIME_MAX_OUTPUT_TOKENS = Number(
+  process.env.REALTIME_MAX_OUTPUT_TOKENS ?? '160',
+);
+const REALTIME_INPUT_TRANSCRIPTION =
+  process.env.REALTIME_INPUT_TRANSCRIPTION === 'true';
+type RealtimeTranscriptionModel =
+  | 'whisper-1'
+  | 'gpt-4o-transcribe'
+  | 'gpt-4o-mini-transcribe'
+  | 'gpt-4o-transcribe-latest';
+const REALTIME_TRANSCRIPTION_MODEL = ([
+  'whisper-1',
+  'gpt-4o-transcribe',
+  'gpt-4o-mini-transcribe',
+  'gpt-4o-transcribe-latest',
+].includes(process.env.REALTIME_TRANSCRIPTION_MODEL ?? '')
+  ? process.env.REALTIME_TRANSCRIPTION_MODEL
+  : 'gpt-4o-mini-transcribe') as RealtimeTranscriptionModel;
+const REALTIME_LOCAL_VAD = process.env.REALTIME_LOCAL_VAD !== 'false';
+// Local gate drops obvious non-speech before it reaches Realtime. This reduces
+// false server VAD commits from room noise, which are the expensive mistakes.
+const REALTIME_LOCAL_VAD_THRESHOLD = Number(
+  process.env.REALTIME_LOCAL_VAD_THRESHOLD ?? '1.0',
+);
+const REALTIME_LOCAL_VAD_PREFIX_MS = Number(
+  process.env.REALTIME_LOCAL_VAD_PREFIX_MS ?? '300',
+);
+const REALTIME_LOCAL_VAD_SILENCE_MS = Number(
+  process.env.REALTIME_LOCAL_VAD_SILENCE_MS ?? '700',
+);
 const turnDetection =
   REALTIME_VAD === 'semantic_vad'
     ? ({
@@ -77,7 +107,7 @@ const REALTIME_TRUNCATION =
       : ('auto' as const);
 
 const DEFAULT_RULES = [
-  'Keep replies short and conversational — usually one sentence.',
+  'Keep replies very short and conversational — usually one sentence under 20 words.',
   "Speak naturally and don't over-explain.",
   'Only ask a brief follow-up question when you genuinely need clarification.',
 ].join(' ');
@@ -119,6 +149,21 @@ let sessionActive = false;
 
 function ms(n: number) {
   return `${Math.round(n)}ms`;
+}
+
+function pcmLevelPct(buf: Buffer): number {
+  if (buf.length < 2) return 0;
+  let peak = 0;
+  for (let i = 0; i + 1 < buf.length; i += 2) {
+    const sample = Math.abs(buf.readInt16LE(i));
+    if (sample > peak) peak = sample;
+  }
+  return (peak / 32768) * 100;
+}
+
+function audioMs(buf: Buffer): number {
+  // 24kHz mono 16-bit PCM = 48 bytes/ms.
+  return buf.length / 48;
 }
 
 // ---------------------------------------------------------------------------
@@ -504,7 +549,7 @@ async function runSession(): Promise<void> {
           instructions: INSTRUCTIONS,
           output_modalities: ['audio'],
           // Backstop against an occasional runaway monologue (cost + brevity).
-          max_output_tokens: 512,
+          max_output_tokens: REALTIME_MAX_OUTPUT_TOKENS,
           // Bound re-fed audio context so input cost stops scaling with
           // session length (see REALTIME_TRUNCATION).
           truncation: REALTIME_TRUNCATION,
@@ -513,8 +558,11 @@ async function runSession(): Promise<void> {
               format: { type: 'audio/pcm', rate: RT_RATE },
               // Conference mic on a Pi -> far_field noise reduction.
               noise_reduction: { type: 'far_field' },
-              // Cheap async transcript, useful for logging only.
-              transcription: { model: 'whisper-1' },
+              // Off by default: input transcription is billed separately and
+              // this app only used it for logs.
+              ...(REALTIME_INPUT_TRANSCRIPTION
+                ? { transcription: { model: REALTIME_TRANSCRIPTION_MODEL } }
+                : {}),
               turn_detection: turnDetection,
             },
             output: {
@@ -553,14 +601,74 @@ async function runSession(): Promise<void> {
 
       mic = startMic();
       let micBytes = 0;
-      mic.stdout?.on('data', (buf: Buffer) => {
-        const first = micBytes === 0;
-        micBytes += buf.length;
-        if (first) console.log('🎤 mic producing audio');
+      let sentMicBytes = 0;
+      let localSpeechActive = false;
+      let quietMs = 0;
+      let preRollMs = 0;
+      const preRoll: Buffer[] = [];
+      const sendAudio = (buf: Buffer) => {
+        sentMicBytes += buf.length;
         rt.send({
           type: 'input_audio_buffer.append',
           audio: buf.toString('base64'),
         });
+      };
+      mic.stdout?.on('data', (buf: Buffer) => {
+        const first = micBytes === 0;
+        micBytes += buf.length;
+        if (first) console.log('🎤 mic producing audio');
+
+        if (!REALTIME_LOCAL_VAD) {
+          sendAudio(buf);
+          return;
+        }
+
+        // Cost guard: while waiting for the user, do not stream obvious room
+        // silence/noise to Realtime. This should not affect actual turns: once
+        // a chunk crosses the local level threshold, we send the whole speech
+        // region through and let Realtime's semantic VAD decide turn timing.
+        const chunkMs = audioMs(buf);
+        const loudEnough = pcmLevelPct(buf) >= REALTIME_LOCAL_VAD_THRESHOLD;
+
+        if (loudEnough) {
+          if (!localSpeechActive) {
+            // Include a small lead-in so the first syllable survives the local
+            // gate. Without this, "hey" can become "ey" on quiet/fast starts.
+            for (const b of preRoll) sendAudio(b);
+            preRoll.length = 0;
+            localSpeechActive = true;
+          }
+          quietMs = 0;
+          sendAudio(buf);
+          return;
+        }
+
+        if (localSpeechActive) {
+          // During a detected utterance, keep sending short quiet gaps. Natural
+          // pauses inside a sentence must still reach Realtime or responses can
+          // feel clipped/too eager.
+          quietMs += chunkMs;
+          sendAudio(buf);
+          if (quietMs >= REALTIME_LOCAL_VAD_SILENCE_MS) {
+            // After enough quiet, stop paying to stream idle mic audio until a
+            // new loud chunk starts the next utterance.
+            localSpeechActive = false;
+            quietMs = 0;
+          }
+          return;
+        }
+
+        // Not currently speaking: retain only a tiny rolling buffer for the
+        // next speech start, and drop older idle audio instead of sending it.
+        preRoll.push(buf);
+        preRollMs += chunkMs;
+        while (
+          preRoll.length > 0 &&
+          preRollMs > REALTIME_LOCAL_VAD_PREFIX_MS
+        ) {
+          const dropped = preRoll.shift();
+          if (dropped) preRollMs -= audioMs(dropped);
+        }
       });
       mic.stderr?.on('data', (d: Buffer) => {
         const m = d.toString().trim();
@@ -568,7 +676,9 @@ async function runSession(): Promise<void> {
       });
       // Heartbeat: prove whether the pipeline is actually producing samples.
       const micWatch = setInterval(() => {
-        console.log(`🎤 mic bytes so far: ${micBytes}`);
+        console.log(
+          `🎤 mic bytes so far: ${micBytes} (sent=${sentMicBytes})`,
+        );
       }, 2000);
       mic.on('error', (err) => console.error('[mic] spawn error:', err));
       mic.on('close', (code) => {
@@ -635,9 +745,13 @@ async function runSession(): Promise<void> {
       curItemId = null;
     });
 
-    rt.on('response.done', () => {
+    rt.on('response.done', (e) => {
       activeResponse = false;
       console.log('✅ response.done');
+      const usage = e.response?.usage;
+      if (usage) {
+        console.log('💸 response usage:', JSON.stringify(usage));
+      }
       // response.done = finished GENERATING, not finished PLAYING. Estimate
       // how much queued audio is still draining (24kHz mono 16-bit = 48
       // bytes/ms) and delay the idle countdown until after it plays out, so
@@ -650,6 +764,7 @@ async function runSession(): Promise<void> {
 
     rt.on('conversation.item.input_audio_transcription.completed', (e) => {
       if (e.transcript) console.log('You:', e.transcript.trim());
+      if (e.usage) console.log('💸 transcription usage:', JSON.stringify(e.usage));
     });
     rt.on('response.output_audio_transcript.done', (e) => {
       if (e.transcript) console.log(`${ASSISTANT_NAME}:`, e.transcript.trim());
