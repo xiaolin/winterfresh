@@ -5,7 +5,6 @@ import path from 'node:path';
 import OpenAI from 'openai';
 import { OpenAIRealtimeWS } from 'openai/realtime/ws';
 
-import { chimeWakeDetected } from './tones.js';
 import { runPreflightChecks, cleanupZombieProcesses } from './cleanup.js';
 import { getCachedAudio, cacheAudio } from './tts-cache.js';
 
@@ -69,7 +68,7 @@ const INPUT_VOLUME = Number(process.env.INPUT_VOLUME ?? '2'); // Linux gain fact
 const MAC_GAIN_DB = 6;
 
 // Close the session after this much inactivity to bound cost (always-on device).
-const IDLE_TIMEOUT_MS = Number(process.env.REALTIME_IDLE_MS ?? '45000');
+const IDLE_TIMEOUT_MS = Number(process.env.REALTIME_IDLE_MS ?? '7000');
 
 let isAppRunning = false;
 // Hard guard: never allow two Realtime sessions at once.
@@ -383,7 +382,7 @@ async function runSession(): Promise<void> {
         await Promise.race([
           once(p, 'close'),
           once(p, 'exit'),
-          new Promise((r) => setTimeout(r, 5000)),
+          new Promise((r) => setTimeout(r, 8000)),
         ]);
       } catch (err) {
         console.warn('goodbye playback failed:', err);
@@ -445,7 +444,9 @@ async function runSession(): Promise<void> {
     rt.on('session.updated', async () => {
       if (mic) return; // configure once
       console.log('🎤 Streaming mic — speak now (barge-in supported)');
-      await chimeWakeDetected().catch(() => {});
+      // No wake chime here: it's a separate sox `play` that fights the
+      // single-open EMEET device right before the greeting. The spoken
+      // greeting is the readiness signal instead.
       // Deterministic greeting (otherwise the model ad-libs random openers).
       rt.send({
         type: 'response.create',
