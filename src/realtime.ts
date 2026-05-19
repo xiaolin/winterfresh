@@ -90,7 +90,7 @@ const INSTRUCTIONS = [
 // Deterministic spoken bookends, played from a LOCAL cached WAV (OpenAI
 // tts-1, synthesized once then reused) — never via the Realtime model, so
 // wake/sleep cost $0 in audio tokens.
-const GREETING = process.env.REALTIME_GREETING ?? 'Hi, what’s up?';
+const GREETING = process.env.REALTIME_GREETING ?? 'What’s up?';
 const GOODBYE = process.env.REALTIME_GOODBYE ?? 'Okay, see ya next time.';
 const CLIP_VOICE =
   process.env.REALTIME_CLIP_VOICE ??
