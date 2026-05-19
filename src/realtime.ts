@@ -392,9 +392,19 @@ async function runSession(): Promise<void> {
     };
     endSession = goodbyeAndEnd;
 
-    const bumpIdle = () => {
+    // Idle timeout like app.ts: it only counts down while we're waiting for
+    // the user. Any activity (user speaking, model replying) clears it; it is
+    // re-armed when we go back to waiting. It only fires after a full
+    // IDLE_TIMEOUT_MS with no activity at all.
+    const clearIdle = () => {
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+    const armIdle = () => {
       if (closing || ended) return;
-      if (idleTimer) clearTimeout(idleTimer);
+      clearIdle();
       idleTimer = setTimeout(
         () => goodbyeAndEnd('idle timeout'),
         IDLE_TIMEOUT_MS,
@@ -436,10 +446,13 @@ async function runSession(): Promise<void> {
       activeResponse = true;
       suppressAudio = false; // a new reply has begun; play it
       console.log('🧠 response.created');
+      clearIdle(); // model is active
     });
-    rt.on('input_audio_buffer.speech_stopped', () =>
-      console.log('🗣️ speech_stopped (your turn ended)'),
-    );
+    rt.on('input_audio_buffer.speech_stopped', () => {
+      console.log('🗣️ speech_stopped (your turn ended)');
+      // Waiting on the model now; re-arm as a fallback in case no reply comes.
+      armIdle();
+    });
 
     rt.on('session.updated', async () => {
       if (mic) return; // configure once
@@ -455,7 +468,7 @@ async function runSession(): Promise<void> {
           output_modalities: ['audio'],
         },
       });
-      bumpIdle();
+      armIdle(); // safety until the greeting response starts
 
       mic = startMic();
       let micBytes = 0;
@@ -495,7 +508,7 @@ async function runSession(): Promise<void> {
     // Barge-in: user started talking while the model was speaking.
     rt.on('input_audio_buffer.speech_started', () => {
       console.log('🎙️ speech_started (mic heard you)');
-      bumpIdle();
+      clearIdle(); // user is active
       if (activeResponse) {
         // Only cancel a response that actually exists (avoids noisy errors).
         rt.send({ type: 'response.cancel' });
@@ -523,7 +536,7 @@ async function runSession(): Promise<void> {
     rt.on('response.done', () => {
       activeResponse = false;
       console.log('✅ response.done');
-      bumpIdle();
+      armIdle(); // back to waiting for the user
     });
 
     rt.on('conversation.item.input_audio_transcription.completed', (e) => {
