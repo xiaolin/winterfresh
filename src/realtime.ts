@@ -87,15 +87,19 @@ const INSTRUCTIONS = [
   ASSISTANT_RULES,
 ].join(' ');
 
-// Deterministic spoken bookends, played from a LOCAL cached WAV (OpenAI
-// tts-1, synthesized once then reused) — never via the Realtime model, so
+// Deterministic spoken bookends, played from a LOCAL cached WAV (synthesized
+// once via gpt-4o-mini-tts then reused) — never via the Realtime model, so
 // wake/sleep cost $0 in audio tokens.
 const GREETING = process.env.REALTIME_GREETING ?? 'What’s up?';
 const GOODBYE = process.env.REALTIME_GOODBYE ?? 'Okay, see ya next time.';
+// Match the Realtime voice as closely as the offline TTS allows: same voice
+// name, and gpt-4o-mini-tts (the only speech model that shares Realtime's
+// voice set, including marin/cedar — tts-1 cannot produce them).
 const CLIP_VOICE =
   process.env.REALTIME_CLIP_VOICE ??
   process.env.REALTIME_GOODBYE_VOICE ??
-  'alloy';
+  REALTIME_VOICE;
+const CLIP_MODEL = process.env.REALTIME_CLIP_MODEL ?? 'gpt-4o-mini-tts';
 
 // Realtime PCM is fixed at 24kHz mono, 16-bit, little-endian.
 const RT_RATE = 24000;
@@ -325,15 +329,16 @@ function killProc(p: ReturnType<typeof spawn> | null) {
 }
 
 // ---------------------------------------------------------------------------
-// Local cached TTS clips (greeting/goodbye). Synthesized once via tts-1,
-// cached as WAV, then played locally — never through the Realtime model, so
+// Local cached TTS clips (greeting/goodbye). Synthesized once via
+// gpt-4o-mini-tts, cached as WAV, then played locally — never through the
+// Realtime model, so
 // these fixed phrases cost $0 in audio tokens on every wake/sleep.
 // ---------------------------------------------------------------------------
 async function getClipFile(text: string, voice: string): Promise<string> {
   const cached = await getCachedAudio(text, voice);
   if (cached) return cached;
   const audio = await client.audio.speech.create({
-    model: 'tts-1',
+    model: CLIP_MODEL,
     voice,
     input: text,
     response_format: 'wav',
