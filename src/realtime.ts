@@ -32,9 +32,34 @@ const ASSISTANT_NAME = process.env.ASSISTANT_NAME ?? 'Winter fresh';
 const REALTIME_MODEL = process.env.REALTIME_MODEL ?? 'gpt-realtime-2';
 // marin / cedar are the highest quality GA voices.
 const REALTIME_VOICE = process.env.REALTIME_VOICE ?? 'marin';
-// server_vad is more robust on a far-field conference mic than semantic_vad.
+// semantic_vad uses a turn-detection model, so static / non-speech noise
+// doesn't get treated as an interruption (server_vad is pure energy and
+// false-triggers on noise). Default to semantic; REALTIME_VAD=server opts out.
 const REALTIME_VAD =
-  process.env.REALTIME_VAD === 'semantic' ? 'semantic_vad' : 'server_vad';
+  process.env.REALTIME_VAD === 'server' ? 'server_vad' : 'semantic_vad';
+// semantic_vad: lower eagerness = waits longer / less trigger-happy.
+const REALTIME_VAD_EAGERNESS = (process.env.REALTIME_VAD_EAGERNESS ??
+  'auto') as 'low' | 'medium' | 'high' | 'auto';
+// server_vad: raise threshold (0..1, default 0.5) to ignore quieter noise.
+const REALTIME_VAD_THRESHOLD = Number(
+  process.env.REALTIME_VAD_THRESHOLD ?? '0.5',
+);
+const REALTIME_VAD_SILENCE_MS = Number(
+  process.env.REALTIME_VAD_SILENCE_MS ?? '500',
+);
+const turnDetection =
+  REALTIME_VAD === 'semantic_vad'
+    ? ({
+        type: 'semantic_vad',
+        create_response: true,
+        eagerness: REALTIME_VAD_EAGERNESS,
+      } as const)
+    : ({
+        type: 'server_vad',
+        create_response: true,
+        threshold: REALTIME_VAD_THRESHOLD,
+        silence_duration_ms: REALTIME_VAD_SILENCE_MS,
+      } as const);
 
 const DEFAULT_RULES = [
   'Keep replies short and conversational — usually one sentence.',
@@ -228,6 +253,11 @@ function startPlayer(): ReturnType<typeof spawn> {
           String(RT_RATE),
           '-c',
           '1',
+          // Small buffer (~150ms) so playback latency stays low and any
+          // residual after a barge-in is short. Big enough to ride out
+          // delta bursts without underrunning.
+          '--buffer-time=150000',
+          '--period-time=30000',
           '-',
         ],
         { stdio: ['pipe', 'inherit', 'inherit'] },
@@ -428,7 +458,7 @@ async function runSession(): Promise<void> {
               noise_reduction: { type: 'far_field' },
               // Cheap async transcript, useful for logging only.
               transcription: { model: 'whisper-1' },
-              turn_detection: { type: REALTIME_VAD, create_response: true },
+              turn_detection: turnDetection,
             },
             output: {
               format: { type: 'audio/pcm', rate: RT_RATE },
@@ -535,11 +565,16 @@ async function runSession(): Promise<void> {
         }
         activeResponse = false;
       }
-      // Stop feeding the cancelled reply's audio, but keep the SAME player
-      // alive — killing+respawning aplay on the Pi hw device breaks all
-      // subsequent playback. A few hundred ms of buffered audio may still
-      // play out; hardware AEC keeps that from re-triggering the mic.
+      // Flush instantly: kill the player so the audio already queued in
+      // aplay's ALSA buffer stops *now* (otherwise it keeps talking ~1-2s).
+      // We deliberately do NOT respawn here — ensurePlayer() lazily makes a
+      // fresh one on the next reply's first delta, which is seconds away
+      // (you finish talking -> server turn-end -> model responds), giving
+      // the Pi device ample time to release. The earlier breakage was
+      // kill-then-IMMEDIATELY-respawn; deferred respawn avoids the collision.
       suppressAudio = true;
+      killProc(player);
+      player = null;
       playedBytes = 0;
       curItemId = null;
     });
