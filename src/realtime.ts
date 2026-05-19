@@ -149,9 +149,7 @@ function startShutdownListener(onShutdown: () => void): () => void {
     // STOP must never be silently off during a session — relaunch if it dies.
     proc.on('close', (code) => {
       if (stopped) return;
-      console.warn(
-        `[shutdown] listener exited (code ${code}), restarting...`,
-      );
+      console.warn(`[shutdown] listener exited (code ${code}), restarting...`);
       setTimeout(() => {
         if (!stopped) spawnProc();
       }, 300);
@@ -219,11 +217,16 @@ function startPlayer(): ReturnType<typeof spawn> {
         'aplay',
         [
           '-q',
-          '-D', ALSA_PLAY_DEVICE,
-          '-t', 'raw',
-          '-f', 'S16_LE',
-          '-r', String(RT_RATE),
-          '-c', '1',
+          '-D',
+          ALSA_PLAY_DEVICE,
+          '-t',
+          'raw',
+          '-f',
+          'S16_LE',
+          '-r',
+          String(RT_RATE),
+          '-c',
+          '1',
           '-',
         ],
         { stdio: ['pipe', 'inherit', 'inherit'] },
@@ -232,11 +235,16 @@ function startPlayer(): ReturnType<typeof spawn> {
         'play',
         [
           '-q',
-          '-t', 'raw',
-          '-r', String(RT_RATE),
-          '-e', 'signed-integer',
-          '-b', '16',
-          '-c', '1',
+          '-t',
+          'raw',
+          '-r',
+          String(RT_RATE),
+          '-e',
+          'signed-integer',
+          '-b',
+          '16',
+          '-c',
+          '1',
           '-',
         ],
         { stdio: ['pipe', 'inherit', 'inherit'] },
@@ -290,6 +298,10 @@ async function runSession(): Promise<void> {
   let curItemId: string | null = null;
   let curContentIndex = 0;
   let playedBytes = 0;
+  // After a barge-in we stop feeding the player the cancelled response's
+  // tail, but we do NOT kill the player — respawning aplay on the Pi's
+  // single-open hw device collides and kills all further audio.
+  let suppressAudio = false;
 
   let closing = false; // a goodbye is being spoken before teardown
 
@@ -355,7 +367,7 @@ async function runSession(): Promise<void> {
         await Promise.race([
           once(p, 'close'),
           once(p, 'exit'),
-          new Promise((r) => setTimeout(r, 8000)),
+          new Promise((r) => setTimeout(r, 5000)),
         ]);
       } catch (err) {
         console.warn('goodbye playback failed:', err);
@@ -409,6 +421,7 @@ async function runSession(): Promise<void> {
 
     rt.on('response.created', () => {
       activeResponse = true;
+      suppressAudio = false; // a new reply has begun; play it
     });
 
     rt.on('session.updated', async () => {
@@ -447,6 +460,7 @@ async function runSession(): Promise<void> {
         playedBytes = 0;
       }
       activeResponse = true;
+      if (suppressAudio) return; // tail of a cancelled (barged-in) response
       if (player?.stdin && !player.stdin.destroyed) {
         const chunk = Buffer.from(e.delta, 'base64');
         playedBytes += chunk.length;
@@ -472,9 +486,11 @@ async function runSession(): Promise<void> {
         }
         activeResponse = false;
       }
-      // Drop buffered audio so it stops mid-sentence immediately.
-      killProc(player);
-      player = startPlayer();
+      // Stop feeding the cancelled reply's audio, but keep the SAME player
+      // alive — killing+respawning aplay on the Pi hw device breaks all
+      // subsequent playback. A few hundred ms of buffered audio may still
+      // play out; hardware AEC keeps that from re-triggering the mic.
+      suppressAudio = true;
       playedBytes = 0;
       curItemId = null;
     });
