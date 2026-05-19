@@ -57,6 +57,8 @@ const sayExactly = (line: string) =>
 const RT_RATE = 24000;
 
 // Mic capture (mirrors app.ts device handling).
+// Pi playback goes to the USB speakerphone via aplay, same as volume.py.
+const ALSA_PLAY_DEVICE = process.env.ALSA_PLAY_DEVICE ?? 'plughw:2,0';
 const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'mic_share';
 const LINUX_ARECORD_RATE = process.env.ARECORD_RATE ?? '16000';
 const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '2';
@@ -209,24 +211,36 @@ function startMic(): ReturnType<typeof spawn> {
 }
 
 function startPlayer(): ReturnType<typeof spawn> {
-  const p = spawn(
-    'play',
-    [
-      '-q',
-      '-t',
-      'raw',
-      '-r',
-      String(RT_RATE),
-      '-e',
-      'signed-integer',
-      '-b',
-      '16',
-      '-c',
-      '1',
-      '-',
-    ],
-    { stdio: ['pipe', 'inherit', 'inherit'] },
-  );
+  // Stream raw PCM16 24kHz mono from stdin to the speaker. On the Pi, sox's
+  // default sink doesn't reach the USB speakerphone — use aplay on the same
+  // ALSA device volume.py uses, otherwise no audio is heard.
+  const p = IS_LINUX
+    ? spawn(
+        'aplay',
+        [
+          '-q',
+          '-D', ALSA_PLAY_DEVICE,
+          '-t', 'raw',
+          '-f', 'S16_LE',
+          '-r', String(RT_RATE),
+          '-c', '1',
+          '-',
+        ],
+        { stdio: ['pipe', 'inherit', 'inherit'] },
+      )
+    : spawn(
+        'play',
+        [
+          '-q',
+          '-t', 'raw',
+          '-r', String(RT_RATE),
+          '-e', 'signed-integer',
+          '-b', '16',
+          '-c', '1',
+          '-',
+        ],
+        { stdio: ['pipe', 'inherit', 'inherit'] },
+      );
   p.stdin?.on('error', () => {});
   return p;
 }
@@ -331,9 +345,13 @@ async function runSession(): Promise<void> {
           const buf = Buffer.from(await audio.arrayBuffer());
           file = await cacheAudio(GOODBYE, GOODBYE_VOICE, buf);
         }
-        const p = spawn('play', ['-q', file], {
-          stdio: ['ignore', 'inherit', 'inherit'],
-        });
+        const p = IS_LINUX
+          ? spawn('aplay', ['-q', '-D', ALSA_PLAY_DEVICE, file], {
+              stdio: ['ignore', 'inherit', 'inherit'],
+            })
+          : spawn('play', ['-q', file], {
+              stdio: ['ignore', 'inherit', 'inherit'],
+            });
         await Promise.race([
           once(p, 'close'),
           once(p, 'exit'),
