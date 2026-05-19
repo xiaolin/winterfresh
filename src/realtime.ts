@@ -62,9 +62,6 @@ const RT_RATE = 24000;
 // Pi playback goes to the USB speakerphone via aplay, same as volume.py.
 const ALSA_PLAY_DEVICE = process.env.ALSA_PLAY_DEVICE ?? 'plughw:2,0';
 const LINUX_ARECORD_DEVICE = process.env.ARECORD_DEVICE ?? 'mic_share';
-const LINUX_ARECORD_RATE = process.env.ARECORD_RATE ?? '16000';
-const LINUX_ARECORD_CHANNELS = process.env.ARECORD_CHANNELS ?? '2';
-const INPUT_VOLUME = Number(process.env.INPUT_VOLUME ?? '2'); // Linux gain factor
 const MAC_GAIN_DB = 6;
 
 // Close the session after this much inactivity to bound cost (always-on device).
@@ -174,19 +171,21 @@ function startShutdownListener(onShutdown: () => void): () => void {
 // ---------------------------------------------------------------------------
 function startMic(): ReturnType<typeof spawn> {
   if (IS_LINUX) {
-    // arecord (device rate, possibly stereo) -> sox -> 24kHz mono raw PCM16.
+    // No sox: ALSA's `plug` plugin resamples/downmixes the shared mic_share
+    // (dsnoop) device to exactly 24kHz mono raw, so arecord emits the format
+    // Realtime needs directly. Spawned like shutdown_listener.py's arecord,
+    // which is the proven-working primitive on the Pi.
     return spawn(
-      'bash',
+      'arecord',
       [
-        '-lc',
-        [
-          'set -o pipefail;',
-          `arecord -q -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
-          `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} -`,
-          `-t raw -r ${RT_RATE} -e signed-integer -b 16 -c 1 -`,
-        ].join(' '),
+        '-q',
+        '-D', `plug:${LINUX_ARECORD_DEVICE}`,
+        '-f', 'S16_LE',
+        '-c', '1',
+        '-r', String(RT_RATE),
+        '-t', 'raw',
       ],
-      { stdio: ['ignore', 'pipe', 'inherit'], detached: true },
+      { stdio: ['ignore', 'pipe', 'pipe'] },
     );
   }
   // macOS: rec directly at 24kHz mono raw.
@@ -473,14 +472,26 @@ async function runSession(): Promise<void> {
       mic = startMic();
       let micBytes = 0;
       mic.stdout?.on('data', (buf: Buffer) => {
+        const first = micBytes === 0;
         micBytes += buf.length;
-        if (micBytes - buf.length === 0) console.log('🎤 mic producing audio');
+        if (first) console.log('🎤 mic producing audio');
         rt.send({
           type: 'input_audio_buffer.append',
           audio: buf.toString('base64'),
         });
       });
-      mic.on('close', () => {
+      mic.stderr?.on('data', (d: Buffer) => {
+        const m = d.toString().trim();
+        if (m) console.error(`[mic:err] ${m}`);
+      });
+      // Heartbeat: prove whether the pipeline is actually producing samples.
+      const micWatch = setInterval(() => {
+        console.log(`🎤 mic bytes so far: ${micBytes}`);
+      }, 2000);
+      mic.on('error', (err) => console.error('[mic] spawn error:', err));
+      mic.on('close', (code) => {
+        clearInterval(micWatch);
+        console.log(`🎤 mic process closed (code=${code}, bytes=${micBytes})`);
         // Don't hard-end while a goodbye is being spoken — goodbyeAndEnd
         // intentionally kills the mic first.
         if (!ended && !closing && isAppRunning) end('mic stopped');
