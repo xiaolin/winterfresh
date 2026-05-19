@@ -53,9 +53,11 @@ const REALTIME_MAX_OUTPUT_TOKENS = Number(
   // normal replies mid-sentence. Keep the old 512 default and let env tune it.
   process.env.REALTIME_MAX_OUTPUT_TOKENS ?? '512',
 );
-const REALTIME_LOCAL_VAD = process.env.REALTIME_LOCAL_VAD !== 'false';
-// Local gate drops obvious non-speech before it reaches Realtime. This reduces
-// false server VAD commits from room noise, which are the expensive mistakes.
+const REALTIME_LOCAL_VAD = process.env.REALTIME_LOCAL_VAD === 'true';
+// Optional local gate for near-field mics. Keep it OFF by default: on the Pi
+// with the EMEET conference speakerphone, far-field speech can be quiet enough
+// that a simple amplitude threshold makes the assistant feel deaf. Realtime's
+// semantic VAD is better suited to that hardware.
 const REALTIME_LOCAL_VAD_THRESHOLD = Number(
   process.env.REALTIME_LOCAL_VAD_THRESHOLD ?? '1.0',
 );
