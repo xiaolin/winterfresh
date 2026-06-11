@@ -123,6 +123,8 @@ Environment variables in `.env`:
 | `SAMPLE_RATE`           | `24000`                  | Audio sample rate for recording        |
 | `ARECORD_DEVICE`        | `mic_share`              | ALSA device for recording (Linux)      |
 | `ARECORD_CHANNELS`      | `2`                      | Audio channels for recording (Linux)   |
+| `ALSA_PLAY_DEVICE`      | `plughw:2,0`             | ALSA device for playback (Linux)       |
+| `ALSA_CARD`             | `2`                      | ALSA mixer card for volume (Linux)     |
 
 Example `.env` file:
 
@@ -134,6 +136,8 @@ TTS_MODEL=gpt-4o-mini-tts
 WINTERFRESH_MAX_TURNS=20
 ARECORD_DEVICE=mic_share
 ARECORD_CHANNELS=2
+ALSA_PLAY_DEVICE=plughw:CARD=Plus,DEV=0
+ALSA_CARD=Plus
 ```
 
 ### 6. Audio Device Setup (Raspberry Pi)
@@ -153,23 +157,54 @@ aplay -l    # List playback devices
 
 #### 6.2 Configure ALSA for Shared Microphone Access
 
-Create `~/.asoundrc` to allow multiple processes to share the microphone:
+Create a system-wide ALSA config so the `mic_share` recording device exists
+after reboot and is visible to PM2. First confirm the stable card id:
 
 ```bash
-cat > ~/.asoundrc << 'EOF'
+cat /proc/asound/cards
+arecord -l
+```
+
+For the EMEET OfficeCore M0 Plus, the card often appears like this:
+
+```text
+2 [Plus           ]: USB-Audio - EMEET OfficeCore M0 Plus
+card 2: Plus [EMEET OfficeCore M0 Plus], device 0: USB Audio [USB Audio]
+```
+
+Use the stable card id, `Plus` in this example, not the numeric card
+`hw:2,0`. The numeric card can change after reboot.
+
+```bash
+sudo nano /etc/asound.conf
+```
+
+Add this config, replacing `Plus` if your card id is different:
+
+```text
 pcm.mic_share {
     type dsnoop
     ipc_key 12345
+    ipc_perm 0666
     slave {
-        pcm "hw:2,0"
+        pcm "hw:CARD=Plus,DEV=0"
         rate 16000
         channels 2
     }
 }
-EOF
 ```
 
-**Note:** Replace `hw:2,0` with your actual card number from `arecord -l` if different.
+Then verify that ALSA can see the shared microphone:
+
+```bash
+arecord -D mic_share -f S16_LE -c 2 -r 16000 -d 3 /tmp/test.wav
+aplay -D plughw:CARD=Plus,DEV=0 /tmp/test.wav
+```
+
+If you prefer a project-local config, copy `config/asoundrc.example` to
+`config/asoundrc` and update the `CARD` value there. The PM2 config loads it
+through `ALSA_CONFIG_PATH` when that file exists. The system-wide
+`/etc/asound.conf` path is simpler and more reliable on boot.
 
 #### 6.3 Configure PulseAudio
 
@@ -209,8 +244,8 @@ EOF
 # Test recording with shared device
 arecord -D mic_share -f S16_LE -c 2 -r 16000 -d 3 /tmp/test.wav
 
-# Test playback
-aplay -D plughw:2,0 /tmp/test.wav
+# Test playback with the same stable card id
+aplay -D plughw:CARD=Plus,DEV=0 /tmp/test.wav
 
 # Test simultaneous recording (both should work without "Device busy" error)
 arecord -D mic_share -f S16_LE -c 2 -r 16000 -d 10 /tmp/test1.wav &
@@ -386,6 +421,39 @@ source .venv/bin/activate
 python -c "import sounddevice as sd; print(sd.query_devices())"
 ```
 
+### `Unknown PCM mic_share` after reboot
+
+This means the USB speakerphone may be detected, but the ALSA alias
+`mic_share` is not defined or not visible to the process.
+
+```bash
+# Confirm the hardware exists
+lsusb
+cat /proc/asound/cards
+arecord -l
+aplay -l
+
+# Check whether mic_share is configured
+cat ~/.asoundrc
+cat /etc/asound.conf
+arecord -L | grep -A5 mic_share
+```
+
+If both `~/.asoundrc` and `/etc/asound.conf` are missing, create
+`/etc/asound.conf` using the setup in section 6.2. For the current EMEET setup,
+the important line is:
+
+```text
+pcm "hw:CARD=Plus,DEV=0"
+```
+
+After creating it:
+
+```bash
+arecord -D mic_share -f S16_LE -c 2 -r 16000 -d 3 /tmp/test.wav
+pm2 restart winterfresh-realtime --update-env
+```
+
 ### PulseAudio connection refused
 
 ```bash
@@ -418,21 +486,11 @@ cat ~/.config/pulse/default.pa
 This happens when multiple processes try to access the microphone without using the shared `dsnoop` device.
 
 ```bash
-# Verify ~/.asoundrc exists
-cat ~/.asoundrc
+# Verify the system-wide ALSA config exists
+cat /etc/asound.conf
 
-# If missing, recreate it
-cat > ~/.asoundrc << 'EOF'
-pcm.mic_share {
-    type dsnoop
-    ipc_key 12345
-    slave {
-        pcm "hw:2,0"
-        rate 16000
-        channels 2
-    }
-}
-EOF
+# If missing, create it using the stable card id from arecord -l
+arecord -l
 
 # Make sure .env uses mic_share
 grep ARECORD .env
