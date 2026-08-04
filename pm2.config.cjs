@@ -1,5 +1,3 @@
-const ASSISTANT_NAME = process.env.ASSISTANT_NAME || "Winter fresh";
-
 const common = {
   autorestart: true,
   max_restarts: 50,
@@ -14,7 +12,7 @@ const common = {
 module.exports = {
   apps: [
     {
-      name: ASSISTANT_NAME,
+      name: "winterfresh",
       script: "dist/app.js",
       ...common,
     },
