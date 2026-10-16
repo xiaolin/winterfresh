@@ -20,12 +20,28 @@ import {
   resetErrorCounter,
 } from './cleanup.js';
 
-import { getCachedAudio, cacheAudio, CACHED_PHRASES } from './tts-cache.js';
+import {
+  getCachedAudio,
+  cacheAudio,
+  CACHED_PHRASES,
+  ERROR_PHRASE,
+} from './tts-cache.js';
 
 const IS_LINUX = process.platform === 'linux';
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// SDK defaults (OpenAI: 10min x 3 attempts) make a hung request look like a crash.
+const API_TIMEOUT_MS = Number(process.env.API_TIMEOUT_MS ?? '15000');
+const API_MAX_RETRIES = 1;
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  timeout: API_TIMEOUT_MS,
+  maxRetries: API_MAX_RETRIES,
+});
 const ASSISTANT_NAME = process.env.ASSISTANT_NAME ?? 'Winter fresh';
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+  timeout: API_TIMEOUT_MS,
+  maxRetries: API_MAX_RETRIES,
+});
 const cartesia = new CartesiaClient({ apiKey: process.env.CARTESIA_API_KEY });
 // faster TTS but has accent when speaking other languages
 const USE_CARTESIA_TTS = process.env.USE_CARTESIA_TTS === 'true';
@@ -80,6 +96,13 @@ let isShutdownListenerStarting = false;
 let wakeListenerProcess: ReturnType<typeof spawn> | null = null;
 let isWakeListenerStarting = false;
 let isAppRunning = false;
+// Bumped by every start(). Loops and in-flight turns capture it so a slow API
+// call from an old session can't resume after a restart flips isAppRunning back on.
+let runId = 0;
+let isGoingToSleep = false;
+// Bumped by every killCurrentTTS() so a TTS fetch that was cancelled mid-request
+// doesn't start playing once its audio arrives.
+let ttsGen = 0;
 let restartTimeout: NodeJS.Timeout | null = null;
 let historyTimeout: NodeJS.Timeout | null = null;
 
@@ -182,6 +205,10 @@ function stopShutdownListener(): void {
 }
 // end shutdown listener functions
 
+function isCurrentRun(id: number) {
+  return isAppRunning && id === runId;
+}
+
 function ms(n: number) {
   return `${Math.round(n)}ms`;
 }
@@ -249,10 +276,16 @@ function restartHistoryTimeout() {
 }
 
 async function backToSleep() {
+  // Shutdown phrase and idle timeout can both fire; only one goodbye/restart.
+  if (isGoingToSleep) return;
+  isGoingToSleep = true;
   isAppRunning = false; // stop app loop and let restart handle it
 
   // Stop the shutdown listener first
   stopShutdownListener();
+
+  // Stop recording so the chat loop exits now (and doesn't barge-in on the goodbye)
+  killCurrentRecProcess();
 
   // Kill any current TTS before speaking goodbye
   killCurrentTTS();
@@ -267,6 +300,7 @@ async function backToSleep() {
 
   // Small buffer to ensure audio fully plays out
   await new Promise((resolve) => setTimeout(resolve, 500));
+  isGoingToSleep = false; // restart() never returns (start() loops forever)
   await restart();
 }
 
@@ -510,6 +544,7 @@ async function chat(messages: Msg[]): Promise<string> {
 }
 
 function killCurrentTTS() {
+  ttsGen++;
   try {
     if (currentTtsProcess) {
       currentTtsProcess.kill('SIGKILL');
@@ -526,11 +561,13 @@ async function speakTTS(text: string) {
   // Kill any previous playback (safety)
   killCurrentTTS();
   addSpeakingOperation();
+  const gen = ttsGen;
 
   const cachedPath = await getCachedAudio(
     text,
     USE_CARTESIA_TTS ? CARTESIA_VOICE_ID : TTS_VOICE_ID,
   );
+  if (gen !== ttsGen) return; // cancelled while looking up cache
   if (cachedPath) {
     console.log('⏱️ tts(cache)=hit');
     const speakProcess = spawn('play', ['-q', cachedPath], {
@@ -544,37 +581,51 @@ async function speakTTS(text: string) {
         once(speakProcess, 'close'),
       ]);
     } finally {
-      killCurrentTTS();
+      finishTTS(speakProcess);
     }
     return;
   }
 
   // Use Cartesia for faster TTS
   if (USE_CARTESIA_TTS && process.env.CARTESIA_API_KEY) {
-    await speakTTSCartesia(text);
+    await speakTTSCartesia(text, gen);
     return;
   }
 
   // Fallback to OpenAI TTS
-  await speakTTSOpenAI(text);
+  await speakTTSOpenAI(text, gen);
 }
 
-async function speakTTSCartesia(text: string) {
+// Only tear down playback we still own; a newer speakTTS may have replaced it.
+function finishTTS(proc: ReturnType<typeof spawn>) {
+  if (currentTtsProcess === proc) {
+    killCurrentTTS();
+  } else {
+    try {
+      proc.kill('SIGKILL');
+    } catch {}
+  }
+}
+
+async function speakTTSCartesia(text: string, gen: number) {
   const tReq = performance.now();
 
-  const response = await cartesia.tts.bytes({
-    modelId: 'sonic-2',
-    transcript: text,
-    voice: {
-      mode: 'id',
-      id: CARTESIA_VOICE_ID,
+  const response = await cartesia.tts.bytes(
+    {
+      modelId: 'sonic-2',
+      transcript: text,
+      voice: {
+        mode: 'id',
+        id: CARTESIA_VOICE_ID,
+      },
+      outputFormat: {
+        container: 'wav',
+        sampleRate: 44100,
+        encoding: 'pcm_s16le',
+      },
     },
-    outputFormat: {
-      container: 'wav',
-      sampleRate: 44100,
-      encoding: 'pcm_s16le',
-    },
-  });
+    { timeoutInSeconds: API_TIMEOUT_MS / 1000, maxRetries: API_MAX_RETRIES },
+  );
 
   const tResp = performance.now();
   console.log(`⏱️ tts(cartesia-api)=${ms(tResp - tReq)}`);
@@ -588,6 +639,8 @@ async function speakTTSCartesia(text: string) {
 
   const tBuffer = performance.now();
   console.log(`⏱️ tts(cartesia-stream)=${ms(tBuffer - tResp)}`);
+
+  if (gen !== ttsGen) return; // cancelled (barge-in / going to sleep) during fetch
 
   const speakProcess = spawn('play', ['-q', '-t', 'wav', '-'], {
     stdio: ['pipe', 'inherit', 'inherit'],
@@ -609,7 +662,7 @@ async function speakTTSCartesia(text: string) {
   } finally {
     const tDone = performance.now();
     console.log(`⏱️ tts(playback)=${ms(tDone - tBuffer)}`);
-    killCurrentTTS();
+    finishTTS(speakProcess);
   }
 
   // Now audioBuffer is a proper Buffer, cacheAudio will work
@@ -618,7 +671,7 @@ async function speakTTSCartesia(text: string) {
   }
 }
 
-async function speakTTSOpenAI(text: string) {
+async function speakTTSOpenAI(text: string, gen: number) {
   const tReq = performance.now();
   const audio = await client.audio.speech.create({
     model: TTS_MODEL,
@@ -628,6 +681,12 @@ async function speakTTSOpenAI(text: string) {
   });
   const tResp = performance.now();
   console.log(`⏱️ tts(api)=${ms(tResp - tReq)}`);
+
+  if (gen !== ttsGen) {
+    // cancelled (barge-in / going to sleep) during fetch
+    void audio.body?.cancel().catch(() => {});
+    return;
+  }
 
   const chunks: Buffer[] = [];
   const speakProcess = spawn('play', ['-q', '-t', 'wav', '-'], {
@@ -645,10 +704,10 @@ async function speakTTSOpenAI(text: string) {
 
   if (reader && speakProcess.stdin) {
     try {
-      while (true) {
+      while (gen === ttsGen) {
         addSpeakingOperation();
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done || gen !== ttsGen) break;
 
         if (tFirstByte === null) {
           tFirstByte = performance.now();
@@ -685,7 +744,7 @@ async function speakTTSOpenAI(text: string) {
     if (tFirstWrite !== null) {
       console.log(`⏱️ tts(playback)=${ms(tDone - tFirstWrite)}`);
     }
-    killCurrentTTS();
+    finishTTS(speakProcess);
   }
 
   const fullAudio = Buffer.concat(chunks);
@@ -750,7 +809,7 @@ async function startWakeWordListener(): Promise<void> {
   });
 }
 
-async function startChatSession() {
+async function startChatSession(id: number) {
   const messages = conversationHistory;
 
   const historyAge =
@@ -765,12 +824,14 @@ async function startChatSession() {
     await speakTTS("What's up?");
   }
 
+  if (!isCurrentRun(id)) return;
+
   // Start background shutdown listener
   startShutdownListener();
 
   let abortPending = false;
 
-  while (true && isAppRunning) {
+  while (isCurrentRun(id)) {
     console.log('\n--- Speak now (auto-stops on silence) ---');
 
     const tRec0 = performance.now();
@@ -786,7 +847,7 @@ async function startChatSession() {
     );
 
     if (!completedNormally) return;
-    if (!isAppRunning) return;
+    if (!isCurrentRun(id)) return;
 
     chimeProcessingStart();
     console.log('Processing voice input...');
@@ -813,7 +874,7 @@ async function startChatSession() {
           `⏱️ transcribeBytes=${ms(t1 - t0)} (bytes=${wavBytes.length})`,
         );
 
-        if (!isAppRunning || abortPending) return;
+        if (!isCurrentRun(id) || abortPending) return;
 
         if (!text) {
           chimeProcessingStop();
@@ -831,7 +892,7 @@ async function startChatSession() {
         const t3 = performance.now();
         console.log(`⏱️ chat=${ms(t3 - t2)}`);
 
-        if (!isAppRunning || abortPending) return;
+        if (!isCurrentRun(id) || abortPending) return;
 
         console.log(`${ASSISTANT_NAME} Reply:`, reply);
 
@@ -847,6 +908,10 @@ async function startChatSession() {
         console.log(`⏱️ speakTTS(total)=${ms(t5 - t4)}`);
       } catch (err) {
         console.error('Processing error:', err);
+        // Say something so a failed/timed-out request doesn't sound like a crash
+        if (isCurrentRun(id)) {
+          await speakTTS(ERROR_PHRASE).catch(() => {});
+        }
       } finally {
         chimeProcessingStop();
       }
@@ -955,21 +1020,22 @@ async function warmUpApis(): Promise<void> {
 
 async function start() {
   isAppRunning = true;
+  const id = ++runId;
   resetErrorCounter();
 
-  while (isAppRunning) {
+  while (isCurrentRun(id)) {
     try {
       await startWakeWordListener();
-      if (!isAppRunning) break;
+      if (!isCurrentRun(id)) break;
 
       recordSuccess(); // Wake word detection succeeded
 
-      await startChatSession();
-      if (!isAppRunning) break;
+      await startChatSession(id);
+      if (!isCurrentRun(id)) break;
 
       recordSuccess(); // Session completed successfully
     } catch (err) {
-      if (isAppRunning) {
+      if (isCurrentRun(id)) {
         const shouldRestart = recordError(err);
         if (shouldRestart) {
           console.log('🔄 Attempting recovery restart...');

@@ -58,6 +58,9 @@ export async function cacheAudio(
   return cacheFile;
 }
 
+// Cached so it still plays when the network is what failed.
+export const ERROR_PHRASE = "Sorry, I couldn't get an answer. Try again.";
+
 /**
  * Common phrases that should be pre-cached or always cached.
  */
@@ -65,4 +68,5 @@ export const CACHED_PHRASES = [
   'Alright, going back to sleep.',
   "What's up?",
   'Welcome back! How can I assist you further?',
+  ERROR_PHRASE,
 ];
