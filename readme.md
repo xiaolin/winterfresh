@@ -31,6 +31,8 @@ A fast, concise voice assistant for Raspberry Pi with wake word detection, conve
 ### 1. System Setup (Raspberry Pi)
 
 ```bash
+ssh winterfresh@winterfresh.local
+
 # Update system
 sudo apt-get update
 sudo apt-get upgrade -y
