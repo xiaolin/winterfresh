@@ -358,6 +358,9 @@ async function recordUntilSilenceBytes(
           `arecord -q -D ${LINUX_ARECORD_DEVICE} -f S16_LE -c ${LINUX_ARECORD_CHANNELS} -r ${LINUX_ARECORD_RATE} -t raw`,
           `| tee >(cat >&3)`, // send copy to fd 3 for monitoring voice activity
           `| sox -G -v ${INPUT_VOLUME} -t raw -r ${LINUX_ARECORD_RATE} -e signed-integer -b 16 -c ${LINUX_ARECORD_CHANNELS} - -t wav -c 1 -`,
+          // Pick ch0, don't average (same as wake.py): the EMEET's two channels
+          // aren't a clean pair, so averaging cost ~6dB and cancelled far-field speech.
+          `remix 1`,
           ...filterArgs,
           `silence 1 0.05 ${SILENCE_THRESHOLD} 1 ${silenceDuration} ${SILENCE_THRESHOLD}`,
         ].join(' '),
