@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import OpenAI, { toFile } from 'openai';
 import Groq from 'groq-sdk';
@@ -31,6 +32,9 @@ const IS_LINUX = process.platform === 'linux';
 // SDK defaults (OpenAI: 10min x 3 attempts) make a hung request look like a crash.
 const API_TIMEOUT_MS = Number(process.env.API_TIMEOUT_MS ?? '15000');
 const API_MAX_RETRIES = 1;
+// Healthy TTS sends its first byte in <1s, so a long wait means a stalled request;
+// give up fast and let the retry go out. (Covers time-to-headers only, not playback.)
+const TTS_TIMEOUT_MS = Number(process.env.TTS_TIMEOUT_MS ?? '5000');
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   timeout: API_TIMEOUT_MS,
@@ -555,9 +559,8 @@ function killCurrentTTS() {
   }
 }
 
+// The processing beep runs through the TTS fetch and stops the moment the voice starts.
 async function speakTTS(text: string) {
-  // Stop processing chime when TTS starts
-  chimeProcessingStop();
   // Kill any previous playback (safety)
   killCurrentTTS();
   addSpeakingOperation();
@@ -570,6 +573,7 @@ async function speakTTS(text: string) {
   if (gen !== ttsGen) return; // cancelled while looking up cache
   if (cachedPath) {
     console.log('⏱️ tts(cache)=hit');
+    chimeProcessingStop();
     const speakProcess = spawn('play', ['-q', cachedPath], {
       stdio: ['ignore', 'inherit', 'inherit'],
     });
@@ -642,6 +646,7 @@ async function speakTTSCartesia(text: string, gen: number) {
 
   if (gen !== ttsGen) return; // cancelled (barge-in / going to sleep) during fetch
 
+  chimeProcessingStop();
   const speakProcess = spawn('play', ['-q', '-t', 'wav', '-'], {
     stdio: ['pipe', 'inherit', 'inherit'],
   });
@@ -673,12 +678,15 @@ async function speakTTSCartesia(text: string, gen: number) {
 
 async function speakTTSOpenAI(text: string, gen: number) {
   const tReq = performance.now();
-  const audio = await client.audio.speech.create({
-    model: TTS_MODEL,
-    voice: TTS_VOICE_ID,
-    input: text,
-    response_format: 'wav',
-  });
+  const audio = await client.audio.speech.create(
+    {
+      model: TTS_MODEL,
+      voice: TTS_VOICE_ID,
+      input: text,
+      response_format: 'wav',
+    },
+    { timeout: TTS_TIMEOUT_MS },
+  );
   const tResp = performance.now();
   console.log(`⏱️ tts(api)=${ms(tResp - tReq)}`);
 
@@ -721,6 +729,7 @@ async function speakTTSOpenAI(text: string, gen: number) {
           if (tFirstWrite === null) {
             tFirstWrite = performance.now();
             console.log(`⏱️ tts(first-write)=${ms(tFirstWrite - tReq)}`);
+            chimeProcessingStop();
           }
           speakProcess.stdin.write(chunk);
         } else {
@@ -753,10 +762,20 @@ async function speakTTSOpenAI(text: string, gen: number) {
   }
 }
 
-async function startWakeWordListener(): Promise<void> {
+// What the wake listener heard.
+type WakeEvent = {
+  // Bare wake word (the exact-match trigger); its chime is already playing.
+  chime: Promise<void> | null;
+  // "winterfresh <request>": audio from the wake word through the end of the request.
+  commandWav: Buffer | null;
+};
+
+const BARE_WAKE: WakeEvent = { chime: null, commandWav: null };
+
+async function startWakeWordListener(): Promise<WakeEvent> {
   if (wakeListenerProcess || isWakeListenerStarting) {
     console.log('🎤 Wake word listener already running or starting, skipping');
-    return;
+    return BARE_WAKE;
   }
   console.log('\n🎤 Listening for wake word (local Vosk)...');
 
@@ -764,70 +783,212 @@ async function startWakeWordListener(): Promise<void> {
   const pythonPath = path.join(process.cwd(), '.venv', 'bin', 'python');
   const wakePath = path.join(process.cwd(), 'wake.py');
 
-  // Use -u flag for unbuffered Python output
-  wakeListenerProcess = spawn(pythonPath, ['-u', wakePath], {
+  // Use -u flag for unbuffered Python output.
+  // --with-command: also capture "winterfresh <request>" (see Listener in wake.py).
+  const proc = spawn(pythonPath, ['-u', wakePath, '--with-command'], {
     stdio: ['inherit', 'pipe', 'pipe'],
   });
+  wakeListenerProcess = proc;
 
   isWakeListenerStarting = false; // Reset flag on start
 
+  // Only clear the handle if it's still ours; a newer listener may own it.
+  const release = () => {
+    if (wakeListenerProcess === proc) wakeListenerProcess = null;
+  };
+
   return new Promise((resolve, reject) => {
-    wakeListenerProcess?.stdout?.on('data', (data: Buffer) => {
+    let chime: Promise<void> | null = null;
+    let pending = '';
+    let settled = false;
+    const settle = (done: () => void) => {
+      if (settled) return;
+      settled = true;
+      proc.kill('SIGTERM');
+      // Done listening even if it hasn't exited yet; a quick false alarm
+      // restarts the listener before this one finishes shutting down.
+      release();
+      done();
+    };
+
+    proc.stdout?.on('data', (data: Buffer) => {
       const text = data.toString();
       process.stdout.write(text);
 
-      if (text.includes('WAKE')) {
-        // Kick off warmup immediately, but don't block the user flow.
-        // This overlaps with chime + the user starting to talk.
-        void warmUpApis();
-        wakeListenerProcess?.kill('SIGTERM');
-        resolve();
+      // Protocol lines are whole lines; the level bar redraws in place with '\r'.
+      pending += text;
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const raw of lines) {
+        const line = raw.slice(raw.lastIndexOf('\r') + 1).trim();
+
+        if (line === 'WAKE') {
+          // Ack right away; wake.py keeps listening briefly in case the request follows.
+          chime = chimeWakeDetected();
+          // Kick off warmup immediately, but don't block the user flow.
+          // This overlaps with chime + the user starting to talk.
+          void warmUpApis();
+        } else if (line === 'NO_COMMAND') {
+          settle(() => resolve({ chime, commandWav: null }));
+        } else if (line.startsWith('COMMAND ')) {
+          if (!chime) void warmUpApis(); // overlap with transcription instead
+          const wavPath = line.slice('COMMAND '.length);
+          try {
+            const commandWav = readFileSync(wavPath);
+            rmSync(wavPath, { force: true });
+            settle(() => resolve({ chime, commandWav }));
+          } catch (err) {
+            settle(() => reject(err));
+          }
+        }
       }
     });
 
-    wakeListenerProcess?.stderr?.on('data', (data: Buffer) => {
+    proc.stderr?.on('data', (data: Buffer) => {
       process.stderr.write(data);
     });
 
-    wakeListenerProcess?.on('error', (err) => {
+    proc.on('error', (err) => {
       isWakeListenerStarting = false;
-      wakeListenerProcess = null;
-      reject(err);
+      release();
+      settle(() => reject(err));
     });
 
-    wakeListenerProcess?.on('close', (code) => {
+    proc.on('close', (code) => {
       isWakeListenerStarting = false;
-      wakeListenerProcess = null;
-      if (code === 0) {
-        resolve();
-      } else if (code !== null && isAppRunning) {
-        reject(new Error(`Wake process exited with code ${code}`));
+      release();
+      if (code !== 0 && code !== null && isAppRunning) {
+        settle(() => reject(new Error(`Wake process exited with code ${code}`)));
       } else {
-        resolve(); // Resolve for null code or when app is stopping
+        // Resolve for clean exit, null code, or when app is stopping
+        settle(() => resolve({ chime, commandWav: null }));
       }
     });
   });
 }
 
-async function startChatSession(id: number) {
+// The name as one token: 'Winter fresh' -> 'winterfresh'
+const WAKE_KEY = ASSISTANT_NAME.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// "Hey, Winter-Fresh! Why is the sky blue?" -> "Why is the sky blue?"
+// null if the transcript doesn't open with the name ("Winter's fresh snow..." doesn't).
+function stripWakeWord(text: string): string | null {
+  const tokens = [...text.matchAll(/[A-Za-z0-9']+/g)];
+  let i = tokens[0]?.[0].toLowerCase() === 'hey' ? 1 : 0;
+  let joined = '';
+  let end = 0;
+  for (; i < tokens.length && joined.length < WAKE_KEY.length; i++) {
+    const token = tokens[i]!;
+    joined += token[0].toLowerCase();
+    end = token.index + token[0].length;
+  }
+  if (joined !== WAKE_KEY) return null;
+  return text.slice(end).replace(/^[\s\p{P}]+/u, '').trim();
+}
+
+// Whisper's read of the "winterfresh <request>" audio from wake.py: the request,
+// or '' if there was none. When Vosk only matched a prefix (not confirmed), Whisper
+// must hear the name too; otherwise null, i.e. a false alarm.
+async function transcribeWakeCommand(
+  wav: Buffer,
+  confirmed: boolean,
+): Promise<string | null> {
+  let text: string;
+  try {
+    const t0 = performance.now();
+    // No Whisper prompt with the name: biasing it would defeat the confirmation.
+    text = await transcribeBytes(wav);
+    console.log(
+      `⏱️ transcribeWakeCommand=${ms(performance.now() - t0)} (bytes=${wav.length})`,
+    );
+  } catch (err) {
+    console.error('Wake command transcription error:', err);
+    return confirmed ? '' : null;
+  }
+  console.log(`Heard: "${text}"`);
+  return stripWakeWord(text) ?? (confirmed ? text : null);
+}
+
+// Chat on one user utterance and speak the reply.
+async function respond(id: number, messages: Msg[], text: string) {
+  console.log('You:', text);
+
+  messages.push({ role: 'user', content: text });
+  trimHistory(messages);
+
+  const t2 = performance.now();
+  // get reply from chat
+  const reply = await chat(messages);
+  const t3 = performance.now();
+  console.log(`⏱️ chat=${ms(t3 - t2)}`);
+
+  if (!isCurrentRun(id)) return;
+
+  console.log(`${ASSISTANT_NAME} Reply:`, reply);
+
+  messages.push({ role: 'assistant', content: reply });
+  trimHistory(messages);
+
+  restartHistoryTimeout();
+
+  // speak reply from chat
+  const t4 = performance.now();
+  await speakTTS(reply);
+  const t5 = performance.now();
+  console.log(`⏱️ speakTTS(total)=${ms(t5 - t4)}`);
+}
+
+async function apologize(id: number, err: unknown) {
+  console.error('Processing error:', err);
+  // Say something so a failed/timed-out request doesn't sound like a crash
+  if (isCurrentRun(id)) {
+    await speakTTS(ERROR_PHRASE).catch(() => {});
+  }
+}
+
+async function startChatSession(id: number, wake: WakeEvent) {
   const messages = conversationHistory;
 
   const historyAge =
     lastInteractionTime > 0 ? Date.now() - lastInteractionTime : 0;
   const isReturning = messages.length > 1 && historyAge < HISTORY_TIMEOUT_MS;
 
-  await chimeWakeDetected();
-
-  if (isReturning) {
-    await speakTTS("Welcome back! What's up?");
-  } else {
-    await speakTTS("What's up?");
+  // "winterfresh <request>" in one go: answer it instead of asking "What's up?"
+  let request = '';
+  if (wake.commandWav) {
+    const heard = await transcribeWakeCommand(
+      wake.commandWav,
+      wake.chime !== null,
+    );
+    if (heard === null) {
+      console.log('🙅 Wake word not confirmed by transcription, ignoring');
+      return;
+    }
+    request = heard;
   }
 
   if (!isCurrentRun(id)) return;
 
-  // Start background shutdown listener
-  startShutdownListener();
+  if (request) {
+    void (wake.chime ?? chimeWakeDetected()); // ack while the chat request runs
+    startShutdownListener();
+    chimeProcessingStart();
+    await respond(id, messages, request).catch((err) => apologize(id, err));
+    chimeProcessingStop();
+  } else {
+    await (wake.chime ?? chimeWakeDetected());
+
+    if (isReturning) {
+      await speakTTS("Welcome back! What's up?");
+    } else {
+      await speakTTS("What's up?");
+    }
+
+    if (!isCurrentRun(id)) return;
+
+    // Start background shutdown listener
+    startShutdownListener();
+  }
 
   let abortPending = false;
 
@@ -881,37 +1042,9 @@ async function startChatSession(id: number) {
           return;
         }
 
-        console.log('You:', text);
-
-        messages.push({ role: 'user', content: text });
-        trimHistory(messages);
-
-        const t2 = performance.now();
-        // get reply from chat
-        const reply = await chat(messages);
-        const t3 = performance.now();
-        console.log(`⏱️ chat=${ms(t3 - t2)}`);
-
-        if (!isCurrentRun(id) || abortPending) return;
-
-        console.log(`${ASSISTANT_NAME} Reply:`, reply);
-
-        messages.push({ role: 'assistant', content: reply });
-        trimHistory(messages);
-
-        restartHistoryTimeout();
-
-        // speak reply from chat
-        const t4 = performance.now();
-        await speakTTS(reply);
-        const t5 = performance.now();
-        console.log(`⏱️ speakTTS(total)=${ms(t5 - t4)}`);
+        await respond(id, messages, text);
       } catch (err) {
-        console.error('Processing error:', err);
-        // Say something so a failed/timed-out request doesn't sound like a crash
-        if (isCurrentRun(id)) {
-          await speakTTS(ERROR_PHRASE).catch(() => {});
-        }
+        await apologize(id, err);
       } finally {
         chimeProcessingStop();
       }
@@ -1025,12 +1158,12 @@ async function start() {
 
   while (isCurrentRun(id)) {
     try {
-      await startWakeWordListener();
+      const wake = await startWakeWordListener();
       if (!isCurrentRun(id)) break;
 
       recordSuccess(); // Wake word detection succeeded
 
-      await startChatSession(id);
+      await startChatSession(id, wake);
       if (!isCurrentRun(id)) break;
 
       recordSuccess(); // Session completed successfully

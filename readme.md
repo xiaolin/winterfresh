@@ -127,6 +127,9 @@ Environment variables in `.env`:
 | `ARECORD_CHANNELS`      | `2`                      | Audio channels for recording (Linux)   |
 | `ALSA_PLAY_DEVICE`      | `plughw:2,0`             | ALSA device for playback (Linux)       |
 | `ALSA_CARD`             | `2`                      | ALSA mixer card for volume (Linux)     |
+| `WAKE_FOLLOWUP_MS`      | `600`                    | After a bare wake word, how long to wait for the request to follow before "What's up?" |
+| `WAKE_FOLLOWUP_RMS`     | `500`                    | Loudness that counts as continuing to talk (raise if the wake chime's echo trips it) |
+| `PROCESSING_BEEP_DELAY_MS` | `1500`                | How long a reply can take before the soft "thinking" beep starts |
 
 Example `.env` file:
 
@@ -306,13 +309,18 @@ pm2 logs winterfresh --lines 50
 
 1. **Wake the assistant**: Say "winterfresh", "winter fresh", or "hey winterfresh"
 2. **Speak your request**: After hearing the wake chime
-3. **Interrupt anytime**: Start speaking to interrupt long responses
-4. **Wait for timeout**: 7 seconds of inactivity returns to wake word mode
+3. **Or say it in one go**: "Winterfresh, why is the sky blue?" answers directly (no "What's up?")
+4. **Interrupt anytime**: Start speaking to interrupt long responses
+5. **Wait for timeout**: 7 seconds of inactivity returns to wake word mode
+
+One-breath requests are a two-stage wake: Vosk spots the wake word at the start of the
+utterance, then the transcription must also begin with the name, or it's ignored silently.
+That keeps TV chatter like "winter's fresh snow..." from triggering it.
 
 ### Audio Feedback
 
 - 🎵 **Wake chime** - Wake word detected, ready to listen
-- 🎵 **Processing chime** - Processing your request, stops when assistant speaks
+- 🎵 **Processing beep** - Soft repeating beep only when a reply is slow (after 1.5s); stops when the assistant starts speaking
 
 ### PM2 Commands
 

@@ -11,10 +11,10 @@ let processingChimeProcess: ReturnType<typeof spawn> | null = null;
 let processingLoopTimer: NodeJS.Timeout | null = null;
 let processingLoopRunning = false;
 
-function spawnPlayer(soundPath: string) {
+function spawnPlayer(soundPath: string, ...effects: string[]) {
   // Use SoX `play` everywhere for consistent audio routing on Linux (Pulse/PipeWire setups).
   // Also inherit stderr so failures aren't silent.
-  return spawn('play', ['-q', soundPath], {
+  return spawn('play', ['-q', soundPath, ...effects], {
     stdio: ['ignore', 'ignore', 'inherit'],
   });
 }
@@ -28,39 +28,45 @@ export async function chimeWakeDetected() {
   });
 }
 
-// comment out for now.
+// Soft "still thinking" beep. Quick replies stay silent: it only starts after
+// PROCESSING_BEEP_DELAY_MS, then repeats until the voice starts (chimeProcessingStop).
+const PROCESSING_DELAY_MS = Number(
+  process.env.PROCESSING_BEEP_DELAY_MS ?? '1500',
+);
+const PROCESSING_GAP_MS = 900; // silence between beeps (the beep itself is 0.3s)
+const PROCESSING_VOLUME = '0.6'; // sox gain on processing.wav; keep it under the voice
+
 export function chimeProcessingStart() {
-  // chimeProcessingStop();
-  // const soundPath = path.join(__dirname, '../sounds', 'processing.wav');
-  // processingLoopRunning = true;
-  // const playNext = () => {
-  //   if (!processingLoopRunning) return;
-  //   const p = spawnPlayer(soundPath);
-  //   processingChimeProcess = p;
-  //   p.on('close', () => {
-  //     processingChimeProcess = null;
-  //     if (!processingLoopRunning) return;
-  //     // small gap; tune if you want
-  //     processingLoopTimer = setTimeout(playNext, 150);
-  //   });
-  //   p.on('error', () => {
-  //     processingChimeProcess = null;
-  //     if (!processingLoopRunning) return;
-  //     processingLoopTimer = setTimeout(playNext, 500);
-  //   });
-  // };
-  // playNext();
+  if (processingLoopRunning) return; // already waiting/beeping for this reply
+  processingLoopRunning = true;
+
+  const soundPath = path.join(__dirname, '../sounds', 'processing.wav');
+  const playNext = () => {
+    if (!processingLoopRunning) return;
+    const p = spawnPlayer(soundPath, 'vol', PROCESSING_VOLUME);
+    processingChimeProcess = p;
+    const scheduleNext = () => {
+      if (processingChimeProcess !== p) return; // stopped, or 'close' after 'error'
+      processingChimeProcess = null;
+      if (!processingLoopRunning) return;
+      processingLoopTimer = setTimeout(playNext, PROCESSING_GAP_MS);
+    };
+    p.on('close', scheduleNext);
+    p.on('error', scheduleNext);
+  };
+
+  processingLoopTimer = setTimeout(playNext, PROCESSING_DELAY_MS);
 }
 
 export function chimeProcessingStop() {
-  // processingLoopRunning = false;
-  // if (processingLoopTimer) {
-  //   clearTimeout(processingLoopTimer);
-  //   processingLoopTimer = null;
-  // }
-  // if (processingChimeProcess) {
-  //   // SIGTERM is usually enough; SIGKILL can cut off ALSA weirdly
-  //   processingChimeProcess.kill('SIGTERM');
-  //   processingChimeProcess = null;
-  // }
+  processingLoopRunning = false;
+  if (processingLoopTimer) {
+    clearTimeout(processingLoopTimer);
+    processingLoopTimer = null;
+  }
+  if (processingChimeProcess) {
+    // SIGTERM is usually enough; SIGKILL can cut off ALSA weirdly
+    processingChimeProcess.kill('SIGTERM');
+    processingChimeProcess = null;
+  }
 }
