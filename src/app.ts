@@ -559,7 +559,8 @@ function killCurrentTTS() {
   }
 }
 
-// The processing beep runs through the TTS fetch and stops the moment the voice starts.
+// The processing beep runs through the TTS fetch and stops right before the voice's
+// player opens the speaker (awaited: on the Pi only one player can hold it).
 async function speakTTS(text: string) {
   // Kill any previous playback (safety)
   killCurrentTTS();
@@ -573,7 +574,8 @@ async function speakTTS(text: string) {
   if (gen !== ttsGen) return; // cancelled while looking up cache
   if (cachedPath) {
     console.log('⏱️ tts(cache)=hit');
-    chimeProcessingStop();
+    await chimeProcessingStop();
+    if (gen !== ttsGen) return;
     const speakProcess = spawn('play', ['-q', cachedPath], {
       stdio: ['ignore', 'inherit', 'inherit'],
     });
@@ -644,9 +646,9 @@ async function speakTTSCartesia(text: string, gen: number) {
   const tBuffer = performance.now();
   console.log(`⏱️ tts(cartesia-stream)=${ms(tBuffer - tResp)}`);
 
+  await chimeProcessingStop();
   if (gen !== ttsGen) return; // cancelled (barge-in / going to sleep) during fetch
 
-  chimeProcessingStop();
   const speakProcess = spawn('play', ['-q', '-t', 'wav', '-'], {
     stdio: ['pipe', 'inherit', 'inherit'],
   });
@@ -690,6 +692,7 @@ async function speakTTSOpenAI(text: string, gen: number) {
   const tResp = performance.now();
   console.log(`⏱️ tts(api)=${ms(tResp - tReq)}`);
 
+  await chimeProcessingStop();
   if (gen !== ttsGen) {
     // cancelled (barge-in / going to sleep) during fetch
     void audio.body?.cancel().catch(() => {});
@@ -729,7 +732,6 @@ async function speakTTSOpenAI(text: string, gen: number) {
           if (tFirstWrite === null) {
             tFirstWrite = performance.now();
             console.log(`⏱️ tts(first-write)=${ms(tFirstWrite - tReq)}`);
-            chimeProcessingStop();
           }
           speakProcess.stdin.write(chunk);
         } else {

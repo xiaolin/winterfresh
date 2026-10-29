@@ -10,6 +10,7 @@ const isLinux = process.platform === 'linux';
 let processingChimeProcess: ReturnType<typeof spawn> | null = null;
 let processingLoopTimer: NodeJS.Timeout | null = null;
 let processingLoopRunning = false;
+let processingChimeReleased: Promise<void> = Promise.resolve();
 
 function spawnPlayer(soundPath: string, ...effects: string[]) {
   // Use SoX `play` everywhere for consistent audio routing on Linux (Pulse/PipeWire setups).
@@ -58,15 +59,29 @@ export function chimeProcessingStart() {
   processingLoopTimer = setTimeout(playNext, PROCESSING_DELAY_MS);
 }
 
-export function chimeProcessingStop() {
+// Resolves once the beep has released the speaker. Await it before opening another
+// player: the Pi's ALSA hw device takes one at a time ("Device or resource busy").
+export function chimeProcessingStop(): Promise<void> {
   processingLoopRunning = false;
   if (processingLoopTimer) {
     clearTimeout(processingLoopTimer);
     processingLoopTimer = null;
   }
-  if (processingChimeProcess) {
-    // SIGTERM is usually enough; SIGKILL can cut off ALSA weirdly
-    processingChimeProcess.kill('SIGTERM');
+  const p = processingChimeProcess;
+  if (p) {
     processingChimeProcess = null;
+    processingChimeReleased = new Promise((resolve) => {
+      // SIGTERM is usually enough; SIGKILL can cut off ALSA weirdly, so only if it hangs
+      const force = setTimeout(() => {
+        p.kill('SIGKILL');
+        resolve();
+      }, 500);
+      p.once('close', () => {
+        clearTimeout(force);
+        resolve();
+      });
+      p.kill('SIGTERM');
+    });
   }
+  return processingChimeReleased;
 }
